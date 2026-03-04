@@ -1,0 +1,120 @@
+{
+  "projectType": "saas",
+  "projectName": "Emdash",
+  "projectDescription": "An open-source Agentic Development Environment (ADE) that orchestrates multiple coding agents in parallel using isolated git worktrees.",
+  "theme": "aspen",
+  "primaryColor": "#8c9498",
+  "lightColor": "#2f3a42",
+  "darkColor": "#dbdce0",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/worktrees",
+              "concepts/agents",
+              "concepts/tasks",
+              "concepts/parallel-execution"
+            ]
+          },
+          {
+            "group": "Features",
+            "pages": [
+              "features/providers",
+              "features/ssh-remote",
+              "features/skills",
+              "features/integrations",
+              "features/github-workflow",
+              "features/diff-review"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/settings",
+              "configuration/project-config",
+              "configuration/environment-variables"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/adding-providers",
+              "guides/ssh-setup",
+              "guides/linear-jira",
+              "guides/troubleshooting"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Architecture",
+            "pages": [
+              "api/architecture-overview",
+              "api/main-process",
+              "api/renderer-process",
+              "api/ipc-handlers"
+            ]
+          },
+          {
+            "group": "Services",
+            "pages": [
+              "api/services/worktree-service",
+              "api/services/pty-manager",
+              "api/services/database-service",
+              "api/services/skills-service",
+              "api/services/github-service"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "api/development-setup",
+              "api/testing",
+              "api/contributing"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Parallel execution of multiple coding agents in isolated git worktrees",
+    "Support for 22+ CLI providers (Claude Code, Codex, Qwen, Amp, etc.)",
+    "Remote development over SSH",
+    "Cross-agent skills system based on Agent Skills standard",
+    "Integrations with Linear, Jira, and GitHub Issues",
+    "Real-time terminal and diff visualization",
+    "Automated PR generation and CI/CD integration",
+    "Worktree pooling for instant task starts"
+  ],
+  "publicApiSurface": [
+    "WorktreeService - Git worktree lifecycle management",
+    "WorktreePoolService - Worktree pooling and reuse",
+    "DatabaseService - SQLite CRUD operations",
+    "ptyManager - PTY lifecycle and agent spawning",
+    "SkillsService - Cross-agent skill management",
+    "GitHubService - Git and GitHub operations",
+    "PrGenerationService - Automated PR generation",
+    "RemotePtyService - Remote development over SSH",
+    "ConnectionsService - SSH connection management",
+    "LinearService - Linear integration",
+    "JiraService - Jira integration",
+    "Provider Registry - 22 CLI agent definitions",
+    "IPC Handlers - 25+ handlers for app, db, git, github, ssh, etc."
+  ]
+}
