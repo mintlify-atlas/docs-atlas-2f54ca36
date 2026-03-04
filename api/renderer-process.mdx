@@ -1,0 +1,632 @@
+---
+title: Renderer process
+description: React UI architecture, component structure, and key hooks
+---
+
+## Overview
+
+The renderer process (`src/renderer/`) is the UI layer of Emdash. It runs React 18 with TypeScript, built using Vite. The renderer is sandboxed and communicates with the main process exclusively through IPC via `window.electronAPI`.
+
+**Tech stack**:
+- React 18.3 (functional components + hooks)
+- TypeScript 5.3 (strict mode)
+- Vite 5 (dev server + bundler)
+- Tailwind CSS 3 (utility-first styling)
+- Radix UI (accessible component primitives)
+- Framer Motion (animations)
+- @xterm/xterm 6.0 (terminal emulation)
+- Monaco Editor 0.55 (code editor)
+- TanStack Query (data fetching)
+
+## Application structure
+
+### App.tsx - Root component
+
+`src/renderer/App.tsx` is the entry point:
+
+```typescript
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { AppContextProvider } from './contexts/AppContextProvider';
+import { ProjectManagementProvider } from './contexts/ProjectManagementProvider';
+import { TaskManagementProvider } from './contexts/TaskManagementContext';
+import { WelcomeScreen } from './views/Welcome';
+import { Workspace } from './views/Workspace';
+
+const queryClient = new QueryClient();
+
+export function App() {
+  const [isFirstLaunch, setIsFirstLaunch] = useLocalStorage(FIRST_LAUNCH_KEY, true);
+
+  const renderContent = () => {
+    if (isFirstLaunch) {
+      return <WelcomeScreen onGetStarted={() => setIsFirstLaunch(false)} />;
+    }
+    return <Workspace />;
+  };
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ModalProvider>
+        <AppContextProvider>
+          <GithubContextProvider>
+            <ProjectManagementProvider>
+              <TaskManagementProvider>
+                <AppSettingsProvider>
+                  <ThemeProvider>
+                    <ErrorBoundary>
+                      {renderContent()}
+                    </ErrorBoundary>
+                  </ThemeProvider>
+                </AppSettingsProvider>
+              </TaskManagementProvider>
+            </ProjectManagementProvider>
+          </GithubContextProvider>
+        </AppContextProvider>
+      </ModalProvider>
+    </QueryClientProvider>
+  );
+}
+```
+
+**Context providers** (nested in order):
+1. **QueryClientProvider** - TanStack Query for async state
+2. **ModalProvider** - Modal management
+3. **AppContextProvider** - Global app state
+4. **GithubContextProvider** - GitHub integration state
+5. **ProjectManagementProvider** - Project CRUD operations
+6. **TaskManagementProvider** - Task lifecycle management
+7. **AppSettingsProvider** - User preferences
+8. **ThemeProvider** - Theme and appearance
+
+### Views
+
+**WelcomeScreen** (`src/renderer/views/Welcome.tsx`)
+- First-launch onboarding
+- Shown when `FIRST_LAUNCH_KEY` is true in localStorage
+- Single "Get Started" action transitions to Workspace
+
+**Workspace** (`src/renderer/views/Workspace.tsx`)
+- Main application UI (~700 lines)
+- Layout: Sidebar + Content panes (Editor/Chat/Browser)
+- Manages active project, task, and terminal state
+
+## Key components
+
+### ChatInterface
+
+`src/renderer/components/ChatInterface.tsx` (~1,000 lines) - Main conversation UI.
+
+**Responsibilities**:
+- Render terminal pane using xterm.js
+- Handle PTY data streaming
+- Manage conversation tabs (multi-chat)
+- Send user input to PTY via IPC
+- Terminal resize handling
+
+**PTY integration**:
+
+```typescript
+const ChatInterface = ({ taskId, conversationId, provider }) => {
+  const terminalRef = useRef<HTMLDivElement>(null);
+  const xtermRef = useRef<Terminal | null>(null);
+  const ptyId = `${provider}-chat-${conversationId}`;
+
+  useEffect(() => {
+    // Initialize xterm.js
+    const term = new Terminal({
+      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontSize: 14,
+      theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
+      cursorBlink: true,
+    });
+    
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(terminalRef.current!);
+    fitAddon.fit();
+    xtermRef.current = term;
+
+    // Listen for PTY data
+    const unsubscribe = window.electronAPI.onPtyData(ptyId, (data: string) => {
+      term.write(data);
+    });
+
+    // Send user input to PTY
+    term.onData((data: string) => {
+      window.electronAPI.ptyInput({ id: ptyId, data });
+    });
+
+    return () => {
+      unsubscribe();
+      term.dispose();
+    };
+  }, [ptyId]);
+
+  return <div ref={terminalRef} className="h-full w-full" />;
+};
+```
+
+**Terminal theme**: Loaded from user's terminal config:
+
+```typescript
+const { ok, config } = await window.electronAPI.terminalGetTheme();
+if (ok && config?.theme) {
+  term.options.theme = {
+    background: config.theme.background,
+    foreground: config.theme.foreground,
+    cursor: config.theme.cursor,
+    // ... ANSI colors
+  };
+}
+```
+
+### EditorMode
+
+`src/renderer/components/EditorMode.tsx` - Monaco editor integration.
+
+**Features**:
+- Syntax highlighting for 100+ languages
+- File tree navigation
+- Split pane diff view
+- Inline comments
+- Git integration (show modified lines)
+
+**Monaco setup**:
+
+```typescript
+import * as monaco from 'monaco-editor';
+import { useEffect, useRef } from 'react';
+
+const EditorMode = ({ filePath, content, language }) => {
+  const editorRef = useRef<HTMLDivElement>(null);
+  const monacoRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+
+  useEffect(() => {
+    if (!editorRef.current) return;
+
+    const editor = monaco.editor.create(editorRef.current, {
+      value: content,
+      language: language,
+      theme: 'vs-dark',
+      automaticLayout: true,
+      minimap: { enabled: true },
+      fontSize: 14,
+    });
+
+    monacoRef.current = editor;
+
+    return () => {
+      editor.dispose(); // Critical: prevent memory leaks
+    };
+  }, [filePath]);
+
+  return <div ref={editorRef} className="h-full w-full" />;
+};
+```
+
+**Memory management**: Always dispose Monaco instances:
+
+```typescript
+return () => {
+  if (monacoRef.current) {
+    monacoRef.current.dispose();
+    monacoRef.current = null;
+  }
+};
+```
+
+### FileChangesPanel
+
+`src/renderer/components/FileChangesPanel.tsx` - Git diff visualization.
+
+**Features**:
+- List modified/added/deleted files
+- Click to open diff view
+- Approve/reject changes
+- Bulk operations (approve all, discard all)
+
+**Diff loading**:
+
+```typescript
+const { data: fileChanges } = useQuery({
+  queryKey: ['file-changes', taskId],
+  queryFn: async () => {
+    const { success, data } = await window.electronAPI.getFileChanges({ taskId });
+    if (!success) throw new Error('Failed to load file changes');
+    return data;
+  },
+  refetchInterval: 2000, // Poll every 2 seconds
+});
+```
+
+### CommandPalette
+
+`src/renderer/components/CommandPalette.tsx` - Keyboard-driven command menu.
+
+**Shortcuts**:
+- `Cmd/Ctrl + K` - Open palette
+- `Cmd/Ctrl + P` - Quick file switcher
+- `Cmd/Ctrl + Shift + P` - Action palette
+
+**Actions**:
+- Create new task
+- Switch projects
+- Open settings
+- GitHub operations (create PR, view checks)
+- Worktree management
+
+**Implementation** using `cmdk`:
+
+```typescript
+import { Command } from 'cmdk';
+
+const CommandPalette = ({ open, onOpenChange }) => {
+  return (
+    <Command.Dialog open={open} onOpenChange={onOpenChange}>
+      <Command.Input placeholder="Type a command..." />
+      <Command.List>
+        <Command.Group heading="Tasks">
+          <Command.Item onSelect={handleCreateTask}>
+            Create new task
+          </Command.Item>
+          <Command.Item onSelect={handleSwitchTask}>
+            Switch task
+          </Command.Item>
+        </Command.Group>
+        <Command.Group heading="GitHub">
+          <Command.Item onSelect={handleCreatePR}>
+            Create pull request
+          </Command.Item>
+        </Command.Group>
+      </Command.List>
+    </Command.Dialog>
+  );
+};
+```
+
+### BrowserPane
+
+`src/renderer/components/BrowserPane.tsx` - Embedded webview for previews.
+
+**Use cases**:
+- Preview web app during development
+- View documentation
+- Test responsive layouts
+
+**Webview integration**:
+
+```typescript
+const BrowserPane = ({ url }) => {
+  const webviewRef = useRef<Electron.WebviewTag>(null);
+
+  useEffect(() => {
+    const webview = webviewRef.current;
+    if (!webview) return;
+
+    const handleNavigation = (e: any) => {
+      console.log('Navigated to:', e.url);
+    };
+
+    webview.addEventListener('did-navigate', handleNavigation);
+    return () => {
+      webview.removeEventListener('did-navigate', handleNavigation);
+    };
+  }, []);
+
+  return (
+    <webview
+      ref={webviewRef}
+      src={url}
+      className="w-full h-full"
+      allowpopups="true"
+    />
+  );
+};
+```
+
+## Key hooks
+
+Emdash has 42 custom hooks in `src/renderer/hooks/`. Here are the most important:
+
+### useTaskManagement
+
+`src/renderer/hooks/useTaskManagement.ts` (~864 lines) - Complete task lifecycle.
+
+**Responsibilities**:
+- Create, delete, rename, archive, restore tasks
+- Optimistic UI updates with rollback
+- PTY lifecycle cleanup
+- Worktree management
+
+**Key methods**:
+
+```typescript
+const {
+  tasks,
+  activeTask,
+  createTask,
+  deleteTask,
+  archiveTask,
+  restoreTask,
+  renameTask,
+  isLoading,
+} = useTaskManagement(projectId);
+
+// Create new task
+await createTask({
+  name: 'Fix authentication',
+  provider: 'claude',
+  initialPrompt: 'Fix the login form validation',
+});
+
+// Delete with cleanup
+await deleteTask(taskId);
+// 1. Kills PTY sessions
+// 2. Removes worktree
+// 3. Deletes from database
+// 4. Updates UI optimistically
+```
+
+**Optimistic updates**:
+
+```typescript
+const deleteTask = async (taskId: string) => {
+  // Optimistically remove from UI
+  const previousTasks = tasks;
+  setTasks(tasks.filter(t => t.id !== taskId));
+
+  try {
+    const { success } = await window.electronAPI.deleteTask({ taskId });
+    if (!success) throw new Error('Delete failed');
+  } catch (error) {
+    // Rollback on failure
+    setTasks(previousTasks);
+    toast.error('Failed to delete task');
+  }
+};
+```
+
+### useAppInitialization
+
+`src/renderer/hooks/useAppInitialization.ts` - Two-round loading strategy.
+
+**Why two rounds?**
+- **Round 1**: Fast skeleton (project list, active project ID)
+- **Round 2**: Full hydration (tasks, conversations, git info)
+
+This makes the app feel instant even with 100+ tasks.
+
+```typescript
+const useAppInitialization = () => {
+  const [phase, setPhase] = useState<'skeleton' | 'full' | 'complete'>('skeleton');
+
+  useEffect(() => {
+    // Round 1: Load minimal data for fast render
+    const loadSkeleton = async () => {
+      const { data: projects } = await window.electronAPI.getProjects();
+      setProjects(projects.map(p => ({ id: p.id, name: p.name })));
+      setPhase('full');
+    };
+
+    // Round 2: Load full data in background
+    const loadFull = async () => {
+      const { data: projects } = await window.electronAPI.getProjectsFull();
+      setProjects(projects);
+      setPhase('complete');
+    };
+
+    loadSkeleton();
+  }, []);
+
+  useEffect(() => {
+    if (phase === 'full') loadFull();
+  }, [phase]);
+
+  return { phase, isLoading: phase !== 'complete' };
+};
+```
+
+### useCliAgentDetection
+
+`src/renderer/hooks/useCliAgentDetection.ts` - Detect installed CLI agents.
+
+**How it works**:
+
+```typescript
+const useCliAgentDetection = () => {
+  const [installedAgents, setInstalledAgents] = useState<string[]>([]);
+
+  useEffect(() => {
+    const detect = async () => {
+      const { data } = await window.electronAPI.getInstalledProviders();
+      // data: ['claude', 'codex', 'qwen', 'amp']
+      setInstalledAgents(data);
+    };
+    detect();
+  }, []);
+
+  return { installedAgents, isInstalled: (id: string) => installedAgents.includes(id) };
+};
+```
+
+Main process checks each agent:
+
+```typescript
+// Main process: connectionsService.getInstalledProviders()
+const checkProvider = async (provider: ProviderDefinition) => {
+  try {
+    await execFileAsync('which', [provider.cli]);
+    return true;
+  } catch {
+    return false;
+  }
+};
+```
+
+### useInitialPromptInjection
+
+`src/renderer/hooks/useInitialPromptInjection.ts` - Inject initial prompt into agent.
+
+**Two strategies**:
+
+1. **CLI flag** (Claude, Codex):
+   ```bash
+   claude -i "Fix the login form" --dangerously-skip-permissions
+   ```
+
+2. **Keystroke injection** (Amp, OpenCode):
+   ```typescript
+   // Wait for agent to start
+   await new Promise(resolve => setTimeout(resolve, 1000));
+   // Type the prompt character by character
+   for (const char of prompt) {
+     window.electronAPI.ptyInput({ id: ptyId, data: char });
+   }
+   // Send Enter
+   window.electronAPI.ptyInput({ id: ptyId, data: '\r' });
+   ```
+
+**Provider registry** (`src/shared/providers/registry.ts`) defines which strategy:
+
+```typescript
+{
+  id: 'claude',
+  initialPromptFlag: '-i',
+  useKeystrokeInjection: false,
+},
+{
+  id: 'amp',
+  initialPromptFlag: undefined,
+  useKeystrokeInjection: true, // No CLI flag, must type into TUI
+}
+```
+
+## IPC communication
+
+All main process communication goes through `window.electronAPI`:
+
+```typescript
+// Type-safe IPC calls
+const result = await window.electronAPI.createTask({
+  projectId: 'abc',
+  name: 'Fix bug',
+  provider: 'claude',
+});
+
+if (result.success) {
+  console.log('Task created:', result.data);
+} else {
+  console.error('Error:', result.error);
+}
+```
+
+Types defined in `src/renderer/types/electron-api.d.ts` (~1,870 lines):
+
+```typescript
+declare global {
+  interface Window {
+    electronAPI: {
+      createTask: (args: CreateTaskArgs) => Promise<CreateTaskResult>;
+      deleteTask: (args: { taskId: string }) => Promise<{ success: boolean; error?: string }>;
+      // ... 200+ more methods
+    };
+  }
+}
+```
+
+## State management
+
+**React Context** for global state:
+- `AppContextProvider` - Active project, task selection
+- `ProjectManagementProvider` - Project CRUD
+- `TaskManagementProvider` - Task lifecycle
+
+**TanStack Query** for server state:
+
+```typescript
+const { data, isLoading, error, refetch } = useQuery({
+  queryKey: ['tasks', projectId],
+  queryFn: async () => {
+    const { data } = await window.electronAPI.getTasks({ projectId });
+    return data;
+  },
+  staleTime: 5000, // Consider data fresh for 5s
+});
+```
+
+**Local storage** for preferences:
+
+```typescript
+const [theme, setTheme] = useLocalStorage('theme', 'dark');
+const [lastProject, setLastProject] = useLocalStorage('lastActiveProject', null);
+```
+
+## Testing
+
+Renderer tests located in `src/test/renderer/` (3 test files).
+
+Example using Vitest + React Testing Library:
+
+```typescript
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { TaskList } from '../components/TaskList';
+
+// Mock electronAPI
+window.electronAPI = {
+  getTasks: vi.fn().mockResolvedValue({
+    success: true,
+    data: [{ id: '1', name: 'Task 1' }],
+  }),
+};
+
+describe('TaskList', () => {
+  it('displays tasks', async () => {
+    render(<TaskList projectId="abc" />);
+    await waitFor(() => {
+      expect(screen.getByText('Task 1')).toBeInTheDocument();
+    });
+  });
+});
+```
+
+## Performance considerations
+
+**Monaco disposal**: Always dispose editor instances to prevent memory leaks:
+
+```typescript
+useEffect(() => {
+  const editor = monaco.editor.create(ref.current, options);
+  return () => editor.dispose(); // Critical!
+}, []);
+```
+
+**Terminal data buffering**: PTY data arrives in chunks. Buffer writes for smooth rendering:
+
+```typescript
+const buffer: string[] = [];
+const flushInterval = setInterval(() => {
+  if (buffer.length > 0) {
+    term.write(buffer.join(''));
+    buffer.length = 0;
+  }
+}, 16); // 60fps
+
+window.electronAPI.onPtyData(ptyId, (data) => {
+  buffer.push(data);
+});
+```
+
+**Query deduplication**: TanStack Query automatically deduplicates concurrent requests:
+
+```typescript
+// Multiple components requesting same data = single network call
+useQuery({ queryKey: ['tasks', projectId], queryFn: fetchTasks });
+useQuery({ queryKey: ['tasks', projectId], queryFn: fetchTasks });
+```
+
+## Next steps
+
+- [IPC handlers](/api/ipc-handlers) - Complete IPC reference
+- [Architecture overview](/api/architecture-overview) - High-level architecture

@@ -1,0 +1,357 @@
+---
+title: Project configuration
+description: Configure project-specific behavior with .emdash.json
+---
+
+Each project can have a `.emdash.json` file at its root to customize Emdash's behavior for that specific project. This file is optional and should be committed to version control so all team members share the same configuration.
+
+## Configuration file location
+
+Place `.emdash.json` in your project's root directory (the same directory as your `.git` folder):
+
+```bash
+my-project/
+├── .git/
+├── .emdash.json    # Project configuration
+├── package.json
+└── src/
+```
+
+## Configuration schema
+
+Here's the complete schema for `.emdash.json`:
+
+```json
+{
+  "preservePatterns": ["pattern1", "pattern2"],
+  "shellSetup": "command to run on shell startup",
+  "scripts": {
+    "setup": "optional setup command",
+    "run": "optional run command",
+    "teardown": "optional teardown command"
+  }
+}
+```
+
+## Preserve patterns
+
+By default, Emdash copies certain gitignored files (like `.env` files) from your main repository to task worktrees. You can customize which files are preserved using `preservePatterns`.
+
+<ParamField path="preservePatterns" type="array">
+  Array of glob patterns for files to copy from the main repo to task worktrees. These patterns are matched against gitignored files.
+  
+  **Default patterns** (if not specified):
+  ```json
+  [
+    ".env",
+    ".env.keys",
+    ".env.local",
+    ".env.*.local",
+    ".envrc",
+    "docker-compose.override.yml"
+  ]
+  ```
+</ParamField>
+
+### Use cases for preserve patterns
+
+<Accordion title="Preserve Claude configuration">
+  If you use Claude-specific commands or configuration:
+  
+  ```json
+  {
+    "preservePatterns": [
+      ".env",
+      ".env.local",
+      ".claude/**"
+    ]
+  }
+  ```
+</Accordion>
+
+<Accordion title="Preserve database files">
+  For local development with SQLite or other file-based databases:
+  
+  ```json
+  {
+    "preservePatterns": [
+      ".env",
+      "*.db",
+      "*.sqlite3"
+    ]
+  }
+  ```
+</Accordion>
+
+<Accordion title="Preserve IDE settings">
+  Share IDE configuration across worktrees:
+  
+  ```json
+  {
+    "preservePatterns": [
+      ".env",
+      ".vscode/settings.json",
+      ".idea/**"
+    ]
+  }
+  ```
+</Accordion>
+
+<Accordion title="Preserve certificates and keys">
+  For projects requiring local certificates:
+  
+  ```json
+  {
+    "preservePatterns": [
+      ".env",
+      "certs/**",
+      "*.pem",
+      "*.key"
+    ]
+  }
+  ```
+</Accordion>
+
+<Note>
+Files in the following directories are **never** preserved, even if they match patterns:
+
+- `node_modules`
+- `.git`
+- `vendor`
+- `.cache`
+- `dist`
+- `build`
+- `.next`
+- `.nuxt`
+- `__pycache__`
+- `.venv`
+- `venv`
+</Note>
+
+## Shell setup
+
+Run custom commands when shells are initialized in task worktrees.
+
+<ParamField path="shellSetup" type="string">
+  Shell command(s) to execute when starting a terminal in a task worktree. Useful for activating virtual environments, loading environment variables, or setting up project-specific tools.
+  
+  ```json
+  {
+    "shellSetup": "source venv/bin/activate"
+  }
+  ```
+</ParamField>
+
+### Shell setup examples
+
+<Accordion title="Activate Python virtual environment">
+  ```json
+  {
+    "shellSetup": "source .venv/bin/activate"
+  }
+  ```
+</Accordion>
+
+<Accordion title="Load environment variables">
+  ```json
+  {
+    "shellSetup": "export $(cat .env | xargs)"
+  }
+  ```
+  
+  Or if using direnv:
+  ```json
+  {
+    "shellSetup": "eval \"$(direnv hook bash)\""
+  }
+  ```
+</Accordion>
+
+<Accordion title="Setup Node.js version">
+  ```json
+  {
+    "shellSetup": "nvm use"
+  }
+  ```
+</Accordion>
+
+<Accordion title="Multiple commands">
+  Chain multiple setup commands:
+  
+  ```json
+  {
+    "shellSetup": "nvm use && pnpm install && source .env"
+  }
+  ```
+</Accordion>
+
+<Warning>
+`shellSetup` commands run every time a shell is started in a worktree. Keep commands fast to avoid slowing down terminal startup.
+</Warning>
+
+## Lifecycle scripts
+
+Define custom scripts that run at different points in a task's lifecycle.
+
+<ParamField path="scripts.setup" type="string">
+  Command to run when a task worktree is first created. Use for one-time setup like installing dependencies.
+  
+  ```json
+  {
+    "scripts": {
+      "setup": "pnpm install"
+    }
+  }
+  ```
+</ParamField>
+
+<ParamField path="scripts.run" type="string">
+  Command to run when starting work on a task. Use for development servers or watch processes.
+  
+  ```json
+  {
+    "scripts": {
+      "run": "npm run dev"
+    }
+  }
+  ```
+</ParamField>
+
+<ParamField path="scripts.teardown" type="string">
+  Command to run when cleaning up a task worktree. Use for stopping services or cleaning temporary files.
+  
+  ```json
+  {
+    "scripts": {
+      "teardown": "docker-compose down"
+    }
+  }
+  ```
+</ParamField>
+
+### Lifecycle script examples
+
+<Accordion title="Full lifecycle for a web app">
+  ```json
+  {
+    "scripts": {
+      "setup": "pnpm install && pnpm run build",
+      "run": "pnpm run dev",
+      "teardown": "pnpm run cleanup"
+    }
+  }
+  ```
+</Accordion>
+
+<Accordion title="Docker-based development">
+  ```json
+  {
+    "scripts": {
+      "setup": "docker-compose build",
+      "run": "docker-compose up -d",
+      "teardown": "docker-compose down -v"
+    }
+  }
+  ```
+</Accordion>
+
+<Accordion title="Python project with virtual environment">
+  ```json
+  {
+    "scripts": {
+      "setup": "python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt",
+      "run": "source .venv/bin/activate && python app.py",
+      "teardown": "deactivate"
+    }
+  }
+  ```
+</Accordion>
+
+## Complete examples
+
+### Next.js project
+
+```json .emdash.json
+{
+  "preservePatterns": [
+    ".env",
+    ".env.local",
+    ".env.development.local"
+  ],
+  "shellSetup": "nvm use",
+  "scripts": {
+    "setup": "pnpm install",
+    "run": "pnpm run dev"
+  }
+}
+```
+
+### Python Django project
+
+```json .emdash.json
+{
+  "preservePatterns": [
+    ".env",
+    "*.db",
+    "media/**"
+  ],
+  "shellSetup": "source .venv/bin/activate",
+  "scripts": {
+    "setup": "python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && python manage.py migrate",
+    "run": "source .venv/bin/activate && python manage.py runserver",
+    "teardown": "deactivate"
+  }
+}
+```
+
+### Docker Compose project
+
+```json .emdash.json
+{
+  "preservePatterns": [
+    ".env",
+    ".env.local",
+    "docker-compose.override.yml",
+    "certs/**"
+  ],
+  "scripts": {
+    "setup": "docker-compose build",
+    "run": "docker-compose up -d",
+    "teardown": "docker-compose down"
+  }
+}
+```
+
+### Monorepo with pnpm
+
+```json .emdash.json
+{
+  "preservePatterns": [
+    ".env",
+    ".npmrc",
+    "apps/*/.env.local",
+    "packages/*/.env.local"
+  ],
+  "shellSetup": "nvm use",
+  "scripts": {
+    "setup": "pnpm install --frozen-lockfile",
+    "run": "pnpm run dev"
+  }
+}
+```
+
+## Branch prefix configuration
+
+To customize the Git branch prefix for tasks, use the application settings (not `.emdash.json`):
+
+```json settings.json
+{
+  "repository": {
+    "branchPrefix": "your-prefix"
+  }
+}
+```
+
+This creates branches like `your-prefix/task-name-abc` instead of the default `emdash/task-name-abc`.
+
+See [Application settings](/configuration/settings) for more details.

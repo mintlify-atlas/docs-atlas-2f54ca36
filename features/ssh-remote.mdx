@@ -1,0 +1,358 @@
+---
+title: SSH remote development
+description: Run coding agents on remote servers over SSH with secure credential storage
+---
+
+Emdash supports remote development via SSH, allowing you to run coding agents on remote machines while using the Emdash UI locally. This is useful for:
+
+- Working with large codebases that don't fit on your local machine
+- Running resource-intensive agents on powerful remote servers
+- Accessing development environments in the cloud
+- Collaborating on shared infrastructure
+
+<Info>
+Remote development uses the same parallel worktree workflow as local projects. Each remote task gets its own isolated worktree on the server.
+</Info>
+
+## Architecture
+
+Emdash's remote development stack:
+
+- **Connection**: ssh2 library (Node.js SSH2 client)
+- **Authentication**: Password, private key, or SSH agent
+- **Credential storage**: Keytar (OS keychain integration)
+- **File operations**: SFTP over SSH
+- **Remote shells**: Interactive PTY via ssh2's shell API
+- **Git operations**: Remote execution via `RemoteGitService`
+
+### Key services
+
+| Service | Purpose | Location |
+|---------|---------|----------|
+| `SshService` | Connection management, command execution | `src/main/services/ssh/SshService.ts` |
+| `SshCredentialService` | Secure password/passphrase storage | `src/main/services/ssh/SshCredentialService.ts` |
+| `SshHostKeyService` | Host key verification | `src/main/services/ssh/SshHostKeyService.ts` |
+| `RemotePtyService` | Remote terminal sessions | `src/main/services/RemotePtyService.ts` |
+| `RemoteGitService` | Git operations over SSH | `src/main/services/RemoteGitService.ts` |
+
+## Setting up SSH connections
+
+<Steps>
+  <Step title="Add SSH connection">
+    Go to **Settings → SSH Connections** and click **Add Connection**.
+  </Step>
+
+  <Step title="Configure connection details">
+    Enter your server information:
+    - **Host**: IP address or hostname (e.g., `dev.example.com`)
+    - **Port**: SSH port (default: 22)
+    - **Username**: Your SSH username
+    - **Authentication type**: Agent, Key, or Password
+  </Step>
+
+  <Step title="Choose authentication method">
+    Select one of three authentication types:
+
+    <Tabs>
+      <Tab title="SSH Agent (recommended)">
+        Uses your local SSH agent for authentication. **Best for security and convenience.**
+
+        Requirements:
+        - SSH agent must be running: `eval $(ssh-agent -s)`
+        - Key must be loaded: `ssh-add ~/.ssh/id_ed25519`
+        - Verify with: `ssh-add -l`
+
+        <Note>
+        On macOS, if launching Emdash from Finder/Dock, the app may not detect your SSH agent. Launch from a terminal where the agent is configured, or use key/password authentication.
+        </Note>
+
+        **1Password users**: Configure `IdentityAgent` in `~/.ssh/config`:
+        ```ssh-config
+        Host example.com
+          IdentityAgent "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+        ```
+      </Tab>
+
+      <Tab title="Private Key">
+        Uses a private key file (with optional passphrase).
+
+        - **Private key path**: Path to your key (e.g., `~/.ssh/id_ed25519`)
+        - **Passphrase**: Optional passphrase if your key is encrypted
+
+        Emdash expands `~` to your home directory and stores the passphrase securely in your OS keychain.
+      </Tab>
+
+      <Tab title="Password">
+        Uses username/password authentication.
+
+        - **Password**: Your SSH password
+
+        Stored securely in your OS keychain via Keytar.
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Test the connection">
+    Click **Test Connection** to verify Emdash can connect to your server. A successful test will show:
+    - Connection established
+    - Server OS and shell information
+    - Git availability
+  </Step>
+
+  <Step title="Add a remote project">
+    After connecting, add a remote project:
+    - **Project path**: Absolute path on the remote server (e.g., `/home/user/my-project`)
+    - The project must be a Git repository
+    - Emdash will create worktrees at `<project>/.emdash/worktrees/<task-slug>/`
+  </Step>
+</Steps>
+
+## Credential storage
+
+Emdash uses **Keytar** (native OS keychain integration) to securely store SSH credentials:
+
+```typescript
+// From SshCredentialService.ts
+const SERVICE_NAME = 'emdash-ssh';
+
+// Password storage
+await keytar.setPassword(SERVICE_NAME, `${connectionId}:password`, password);
+
+// Passphrase storage (for encrypted keys)
+await keytar.setPassword(SERVICE_NAME, `${connectionId}:passphrase`, passphrase);
+```
+
+**Keychain locations**:
+- **macOS**: Keychain Access.app
+- **Linux**: libsecret (GNOME Keyring, KWallet)
+- **Windows**: Windows Credential Manager
+
+Credentials are **never** stored in plaintext or in the SQLite database.
+
+## Remote PTY sessions
+
+When you run an agent on a remote server, Emdash:
+
+1. Opens an SSH connection to the server
+2. Creates a shell session via ssh2's `client.shell()`
+3. Injects environment variables and changes to the worktree directory
+4. Spawns the agent CLI
+5. Streams output back to the local terminal UI in real-time
+
+### Security features
+
+<CardGroup cols={2}>
+  <Card title="Shell allowlist" icon="shield-check">
+    Remote PTY restricts shell binaries to a hardcoded allowlist (`/bin/bash`, `/bin/zsh`, etc.) to prevent command injection.
+  </Card>
+
+  <Card title="Env var validation" icon="lock">
+    Environment variable keys are validated against `^[A-Za-z_][A-Za-z0-9_]*$` to prevent shell escaping.
+  </Card>
+
+  <Card title="Argument escaping" icon="shield">
+    All shell arguments pass through `quoteShellArg()` from `src/main/utils/shellEscape.ts`.
+  </Card>
+
+  <Card title="Connection pooling" icon="gauge">
+    Max 10 concurrent SSH connections. Pool warnings at 80% utilization.
+  </Card>
+</CardGroup>
+
+### Code example
+
+From `RemotePtyService.ts:65-100`:
+
+```typescript
+async startRemotePty(options: RemotePtyOptions): Promise<RemotePty> {
+  const connection = this.sshService.getConnection(options.connectionId);
+  if (!connection) {
+    throw new Error(`Connection ${options.connectionId} not found`);
+  }
+
+  const client = connection.client;
+
+  return new Promise((resolve, reject) => {
+    client.shell((err, stream) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      // Validate env var keys to prevent injection
+      const envEntries = Object.entries(options.env || {}).filter(([k]) => {
+        if (!isValidEnvVarName(k)) {
+          console.warn(`[RemotePtyService] Skipping invalid env var name: ${k}`);
+          return false;
+        }
+        return true;
+      });
+      const envVars = envEntries
+        .map(([k, v]) => `export ${k}=${quoteShellArg(v)}`)
+        .join(' && ');
+
+      const cdCommand = options.cwd ? `cd ${quoteShellArg(options.cwd)}` : '';
+
+      // Validate shell against allowlist
+      const shellBinary = options.shell.split(/\s+/)[0];
+      if (!ALLOWED_SHELLS.has(shellBinary)) {
+        reject(new Error(`Shell not allowed: ${shellBinary}`));
+        return;
+      }
+
+      // ...
+    });
+  });
+}
+```
+
+## Remote worktree management
+
+Remote tasks use the same worktree isolation as local tasks:
+
+- **Location**: `<project>/.emdash/worktrees/<task-slug>/`
+- **Branch**: `emdash/<task-slug>-<hash>`
+- **Preserved files**: `.env`, `.envrc`, etc. (same as local)
+
+### Differences from local
+
+<Warning>
+The following features are **local-only** and do not yet work with remote projects:
+
+- File diffs in the UI
+- File watching / live updates
+- Branch push automation
+- Worktree pooling (instant task starts)
+- GitHub PR creation
+- CI/CD check tracking
+</Warning>
+
+<Info>
+Remote Git operations (commit, branch, status) work via `RemoteGitService`, which executes Git commands over SSH.
+</Info>
+
+## Connection management
+
+Emdash maintains a connection pool with automatic cleanup:
+
+```typescript
+// From SshService.ts:12-16
+const MAX_CONNECTIONS = 10;
+const POOL_WARNING_THRESHOLD = 0.8;
+
+// Connection lifecycle
+await sshService.connect(config);       // Establish
+await sshService.executeCommand(...);   // Use
+await sshService.disconnect(id);        // Close
+await sshService.disconnectAll();       // Cleanup on shutdown
+```
+
+### Connection events
+
+`SshService` extends `EventEmitter` and emits:
+
+- `connected`: Connection established
+- `error`: Connection error
+- `disconnected`: Connection closed
+
+## Command execution
+
+All remote commands run in a **login shell** to ensure user configs are loaded:
+
+```typescript
+// From SshService.ts:275-288
+async executeCommand(
+  connectionId: string,
+  command: string,
+  cwd?: string
+): Promise<ExecResult> {
+  const innerCommand = cwd
+    ? `cd ${quoteShellArg(cwd)} && ${command}`
+    : command;
+  const fullCommand = `bash -l -c ${quoteShellArg(innerCommand)}`;
+
+  // Execute via ssh2 client.exec()
+  // Returns { stdout, stderr, exitCode }
+}
+```
+
+This ensures:
+- `~/.ssh/config` is loaded
+- `~/.gitconfig` is available
+- Shell aliases and functions work
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="SSH agent not found">
+    **Symptom**: Error: "SSH agent authentication failed: no agent socket found"
+
+    **Solutions**:
+    1. Start SSH agent: `eval $(ssh-agent -s)`
+    2. Add your key: `ssh-add ~/.ssh/id_ed25519`
+    3. Verify: `ssh-add -l`
+    4. If launching from GUI, restart Emdash from a terminal
+    5. Or use private key/password auth instead
+  </Accordion>
+
+  <Accordion title="Host key verification failed">
+    **Symptom**: Error: "Host key verification failed"
+
+    **Solutions**:
+    1. Ensure the host is in `~/.ssh/known_hosts`
+    2. Run `ssh user@host` manually to accept the host key
+    3. Or temporarily disable strict host checking in `~/.ssh/config`:
+       ```ssh-config
+       Host example.com
+         StrictHostKeyChecking no
+         UserKnownHostsFile /dev/null
+       ```
+  </Accordion>
+
+  <Accordion title="Git not found on remote">
+    **Symptom**: "Git is not installed on the remote server"
+
+    **Solution**: Install Git on the remote server:
+    ```bash
+    # Debian/Ubuntu
+    sudo apt-get install git
+
+    # RHEL/CentOS
+    sudo yum install git
+
+    # macOS
+    brew install git
+    ```
+  </Accordion>
+
+  <Accordion title="Permission denied on worktree directory">
+    **Symptom**: "Failed to create worktree: Permission denied"
+
+    **Solution**: Ensure your SSH user has write access to the project directory:
+    ```bash
+    chmod +w /path/to/project
+    # Or change ownership
+    chown -R your-user:your-group /path/to/project
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Security best practices
+
+1. **Use SSH agent auth** instead of storing passwords/keys
+2. **Rotate credentials** regularly
+3. **Use dedicated SSH keys** for Emdash (not your personal keys)
+4. **Restrict remote user permissions** to project directories only
+5. **Enable SSH key-based auth** and disable password auth on the server:
+   ```ssh-config
+   # /etc/ssh/sshd_config
+   PasswordAuthentication no
+   PubkeyAuthentication yes
+   ```
+6. **Monitor SSH logs** for suspicious activity
+
+## Related resources
+
+- [SSH service source](https://github.com/generalaction/emdash/blob/main/src/main/services/ssh/SshService.ts)
+- [Remote PTY source](https://github.com/generalaction/emdash/blob/main/src/main/services/RemotePtyService.ts)
+- [SSH architecture docs](https://github.com/generalaction/emdash/blob/main/docs/ssh-architecture.md)

@@ -1,0 +1,597 @@
+---
+title: "SkillsService"
+description: "Cross-agent skill management and catalog aggregation"
+---
+
+The `SkillsService` implements the [Agent Skills](https://agentskills.io) standard for Emdash. It manages skill installation, catalog aggregation, and symlink synchronization across multiple CLI agents.
+
+## Overview
+
+The skills system enables cross-agent reusable skill packages. Each skill is a directory containing a `SKILL.md` file with YAML frontmatter.
+
+**Key features:**
+
+- **Central storage**: Skills stored in `~/.agentskills/{skill-name}/`
+- **Agent sync**: Automatic symlink creation to agent-specific directories
+- **Aggregated catalog**: Merges skills from OpenAI, Anthropic, and local sources
+- **Offline fallback**: Bundled catalog for offline use
+- **Custom skills**: Create user-defined skills via UI
+
+**Supported agents:**
+
+- Claude Code: `~/.claude/commands/`
+- Codex: `~/.codex/skills/`
+- Amp: `~/.amp/commands/`
+- OpenCode: `~/.config/opencode/skills/`
+- Qwen Code: `~/.qwencode/skills/`
+
+## Central Storage
+
+### Directory Structure
+
+```
+~/.agentskills/
+├── .emdash/
+│   └── catalog-index.json    # Cached catalog
+├── linear/
+│   └── SKILL.md
+├── slack/
+│   └── SKILL.md
+└── my-custom-skill/
+    └── SKILL.md
+```
+
+### Skill Format
+
+**SKILL.md example:**
+
+```markdown
+---
+name: linear
+description: Linear issue management
+---
+
+# Linear Skill
+
+This skill provides commands for managing Linear issues.
+
+## Usage
+
+...
+```
+
+## Initialization
+
+### initialize
+
+Ensure the skills directory structure exists.
+
+```typescript
+async initialize(): Promise<void>
+```
+
+**Creates:**
+
+- `~/.agentskills/` (central storage)
+- `~/.agentskills/.emdash/` (metadata directory)
+
+**Example:**
+
+```typescript
+import { skillsService } from './services/SkillsService';
+
+await skillsService.initialize();
+```
+
+## Catalog Management
+
+### getCatalogIndex
+
+Get the aggregated skill catalog (cached or bundled).
+
+```typescript
+async getCatalogIndex(): Promise<CatalogIndex>
+```
+
+<ResponseField name="CatalogIndex" type="object">
+  <ResponseField name="version" type="number">
+    Catalog schema version
+  </ResponseField>
+  <ResponseField name="lastUpdated" type="string">
+    ISO 8601 timestamp of last refresh
+  </ResponseField>
+  <ResponseField name="skills" type="CatalogSkill[]">
+    Array of catalog skills
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="CatalogSkill" type="object">
+  <ResponseField name="id" type="string">
+    Unique skill identifier (e.g., `linear`, `slack`)
+  </ResponseField>
+  <ResponseField name="displayName" type="string">
+    Human-readable name
+  </ResponseField>
+  <ResponseField name="description" type="string">
+    Short description
+  </ResponseField>
+  <ResponseField name="source" type="'openai' | 'anthropic' | 'local'">
+    Skill source
+  </ResponseField>
+  <ResponseField name="sourceUrl" type="string">
+    GitHub URL (for remote skills)
+  </ResponseField>
+  <ResponseField name="iconUrl" type="string">
+    Icon URL (for remote skills)
+  </ResponseField>
+  <ResponseField name="brandColor" type="string">
+    Hex color for UI
+  </ResponseField>
+  <ResponseField name="defaultPrompt" type="string">
+    Default prompt text (OpenAI skills only)
+  </ResponseField>
+  <ResponseField name="frontmatter" type="object">
+    Parsed YAML frontmatter from SKILL.md
+  </ResponseField>
+  <ResponseField name="installed" type="boolean">
+    Whether skill is installed locally
+  </ResponseField>
+  <ResponseField name="localPath" type="string">
+    Absolute path to skill directory (if installed)
+  </ResponseField>
+  <ResponseField name="skillMdContent" type="string">
+    Full SKILL.md content (if loaded)
+  </ResponseField>
+</ResponseField>
+
+**Caching strategy:**
+
+1. Return memory cache if available
+2. Check disk cache (`~/.agentskills/.emdash/catalog-index.json`) — use if version matches
+3. Fall back to bundled catalog (`src/main/services/skills/bundled-catalog.json`)
+
+**Example:**
+
+```typescript
+const catalog = await skillsService.getCatalogIndex();
+console.log(`Loaded ${catalog.skills.length} skills`);
+
+for (const skill of catalog.skills) {
+  console.log(`${skill.displayName} (${skill.source}) - ${skill.installed ? 'installed' : 'available'}`);
+}
+```
+
+### refreshCatalog
+
+Fetch the latest catalog from GitHub (OpenAI and Anthropic repos).
+
+```typescript
+async refreshCatalog(): Promise<CatalogIndex>
+```
+
+**Process:**
+
+1. Fetches skills from OpenAI repo (`github.com/openai/skills`)
+2. Fetches skills from Anthropic repo (`github.com/anthropics/skills`)
+3. Deduplicates by skill ID (first occurrence wins)
+4. Saves to disk cache
+5. Merges installed state from local directory
+
+**Fallback behavior:**
+
+If both GitHub fetches fail, returns the existing cached catalog.
+
+**Example:**
+
+```typescript
+const catalog = await skillsService.refreshCatalog();
+console.log(`Refreshed catalog: ${catalog.skills.length} skills available`);
+```
+
+## Skill Installation
+
+### installSkill
+
+Install a skill from the catalog.
+
+```typescript
+async installSkill(skillId: string): Promise<CatalogSkill>
+```
+
+<ParamField path="skillId" type="string" required>
+  Skill ID (e.g., `linear`, `slack`)
+</ParamField>
+
+**Process:**
+
+1. Looks up skill in catalog
+2. Creates temporary directory: `~/.agentskills/{skillId}.tmp-{timestamp}`
+3. Downloads `SKILL.md` from GitHub (or generates stub)
+4. Atomically renames temp directory to final location
+5. Syncs skill to all installed agents (creates symlinks)
+6. Invalidates catalog cache
+
+**Atomic installation:**
+
+Uses `fs.promises.rename()` for atomic move, preventing partial installations.
+
+**Example:**
+
+```typescript
+try {
+  const skill = await skillsService.installSkill('linear');
+  console.log(`Installed ${skill.displayName} at ${skill.localPath}`);
+} catch (error) {
+  console.error('Installation failed:', error.message);
+}
+```
+
+### uninstallSkill
+
+Uninstall a skill.
+
+```typescript
+async uninstallSkill(skillId: string): Promise<void>
+```
+
+<ParamField path="skillId" type="string" required>
+  Skill ID
+</ParamField>
+
+**Process:**
+
+1. Removes symlinks from all agent directories
+2. Removes skill directory from central storage
+3. Invalidates catalog cache
+
+**Example:**
+
+```typescript
+await skillsService.uninstallSkill('linear');
+console.log('Linear skill uninstalled');
+```
+
+### createSkill
+
+Create a new custom skill.
+
+```typescript
+async createSkill(
+  name: string,
+  description: string,
+  content?: string
+): Promise<CatalogSkill>
+```
+
+<ParamField path="name" type="string" required>
+  Skill name (lowercase, alphanumeric, hyphens only, 1-64 chars)
+</ParamField>
+
+<ParamField path="description" type="string" required>
+  Short description
+</ParamField>
+
+<ParamField path="content" type="string">
+  Optional custom content (inserted after frontmatter)
+</ParamField>
+
+**Validation:**
+
+Skill names must match: `/^[a-z0-9-]{1,64}$/`
+
+**Generated SKILL.md:**
+
+```markdown
+---
+name: my-skill
+description: My custom skill
+---
+
+# My Skill
+
+My custom skill
+
+## Usage
+
+...
+```
+
+**Example:**
+
+```typescript
+const skill = await skillsService.createSkill(
+  'my-jira-helper',
+  'Custom JIRA workflow automation',
+  `## Commands
+
+- \`jira-create-ticket\`: Create a new ticket
+- \`jira-list\`: List open tickets`
+);
+
+console.log(`Created skill at ${skill.localPath}`);
+```
+
+## Agent Synchronization
+
+### syncToAgents
+
+Create symlinks for a skill in all installed agent directories.
+
+```typescript
+async syncToAgents(skillId: string): Promise<void>
+```
+
+<ParamField path="skillId" type="string" required>
+  Skill ID
+</ParamField>
+
+**Process:**
+
+1. Checks if each agent's config directory exists (e.g., `~/.claude/`)
+2. Creates symlink: `{agent-skill-dir}/{skillId}` → `~/.agentskills/{skillId}`
+3. Uses `junction` symlink type on Windows for compatibility
+4. Removes existing symlink/directory before creating new one
+
+**Agent target directories:**
+
+- Claude: `~/.claude/commands/{skillId}` → `~/.agentskills/{skillId}`
+- Codex: `~/.codex/skills/{skillId}` → `~/.agentskills/{skillId}`
+- Amp: `~/.amp/commands/{skillId}` → `~/.agentskills/{skillId}`
+- OpenCode: `~/.config/opencode/skills/{skillId}` → `~/.agentskills/{skillId}`
+- Qwen: `~/.qwencode/skills/{skillId}` → `~/.agentskills/{skillId}`
+
+**Example:**
+
+```typescript
+await skillsService.syncToAgents('linear');
+console.log('Linear skill synced to all installed agents');
+```
+
+### unsyncFromAgents
+
+Remove symlinks for a skill from all agent directories.
+
+```typescript
+async unsyncFromAgents(skillId: string): Promise<void>
+```
+
+<ParamField path="skillId" type="string" required>
+  Skill ID
+</ParamField>
+
+**Safety:**
+
+- Only removes symlinks that point to `~/.agentskills/`
+- Never removes real directories (user-managed skills)
+
+**Example:**
+
+```typescript
+await skillsService.unsyncFromAgents('linear');
+console.log('Linear skill removed from all agents');
+```
+
+## Skill Discovery
+
+### getInstalledSkills
+
+Get all locally installed skills (scans central storage and agent directories).
+
+```typescript
+async getInstalledSkills(): Promise<CatalogSkill[]>
+```
+
+**Scan locations:**
+
+- `~/.agentskills/` (central storage)
+- `~/.claude/commands/` (Claude-specific)
+- `~/.codex/skills/` (Codex-specific)
+- `~/.amp/commands/` (Amp-specific)
+- `~/.config/opencode/skills/` (OpenCode-specific)
+- `~/.qwencode/skills/` (Qwen-specific)
+
+**Deduplication:**
+
+Skills found in multiple locations are deduplicated by name (first occurrence wins).
+
+**Example:**
+
+```typescript
+const installed = await skillsService.getInstalledSkills();
+console.log(`${installed.length} skills installed`);
+
+for (const skill of installed) {
+  console.log(`${skill.displayName}: ${skill.localPath}`);
+}
+```
+
+### getSkillDetail
+
+Get full details for a skill (including SKILL.md content).
+
+```typescript
+async getSkillDetail(skillId: string): Promise<CatalogSkill | null>
+```
+
+<ParamField path="skillId" type="string" required>
+  Skill ID
+</ParamField>
+
+**Behavior:**
+
+- For installed skills: reads from local disk
+- For catalog skills: fetches from GitHub
+
+**Example:**
+
+```typescript
+const skill = await skillsService.getSkillDetail('linear');
+if (skill) {
+  console.log('SKILL.md content:');
+  console.log(skill.skillMdContent);
+}
+```
+
+### getDetectedAgents
+
+Detect which CLI agents are installed on the system.
+
+```typescript
+async getDetectedAgents(): Promise<DetectedAgent[]>
+```
+
+<ResponseField name="DetectedAgent" type="object">
+  <ResponseField name="id" type="string">
+    Agent ID (e.g., `claude`, `codex`)
+  </ResponseField>
+  <ResponseField name="name" type="string">
+    Human-readable name (e.g., `Claude Code`)
+  </ResponseField>
+  <ResponseField name="configDir" type="string">
+    Configuration directory path
+  </ResponseField>
+  <ResponseField name="installed" type="boolean">
+    Whether the config directory exists
+  </ResponseField>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const agents = await skillsService.getDetectedAgents();
+for (const agent of agents) {
+  console.log(`${agent.name}: ${agent.installed ? 'installed' : 'not installed'}`);
+}
+// Output:
+// Claude Code: installed
+// Codex: not installed
+// Amp: installed
+```
+
+## Catalog Sources
+
+### OpenAI Skills
+
+**Repository:** `github.com/openai/skills`
+
+**Directories:**
+
+- `skills/.curated/` — Curated community skills
+- `skills/.system/` — System/built-in skills
+
+**Metadata:**
+
+Parsed from `agents/openai.yaml` in each skill directory:
+
+```yaml
+interface:
+  display_name: "Linear"
+  short_description: "Manage Linear issues"
+  icon_small: "./logo.png"
+  brand_color: "#5E6AD2"
+  default_prompt: "List my open issues"
+```
+
+### Anthropic Skills
+
+**Repository:** `github.com/anthropics/skills`
+
+**Directory:** `skills/`
+
+**Metadata:**
+
+Parsed from `SKILL.md` frontmatter:
+
+```yaml
+---
+name: slack
+description: Slack messaging and channel management
+---
+```
+
+### Bundled Catalog
+
+**Location:** `src/main/services/skills/bundled-catalog.json`
+
+**Purpose:** Offline fallback when GitHub is unreachable.
+
+**Update process:**
+
+1. Run `refreshCatalog()` with network access
+2. Copy `~/.agentskills/.emdash/catalog-index.json` to `bundled-catalog.json`
+3. Commit to repository
+
+## Error Handling
+
+### Invalid Skill Name
+
+```typescript
+try {
+  await skillsService.createSkill('My Skill', 'description');
+} catch (error) {
+  console.error(error.message);
+  // "Invalid skill name. Use lowercase letters, numbers, and hyphens (1-64 chars)."
+}
+```
+
+### Skill Already Exists
+
+```typescript
+try {
+  await skillsService.createSkill('linear', 'description');
+} catch (error) {
+  console.error(error.message);
+  // 'Skill "linear" already exists'
+}
+```
+
+### Skill Not Found
+
+```typescript
+try {
+  await skillsService.installSkill('nonexistent-skill');
+} catch (error) {
+  console.error(error.message);
+  // 'Skill "nonexistent-skill" not found in catalog'
+}
+```
+
+### Already Installed
+
+```typescript
+try {
+  await skillsService.installSkill('linear');
+} catch (error) {
+  console.error(error.message);
+  // 'Skill "linear" is already installed'
+}
+```
+
+## Location
+
+**Source:** `src/main/services/SkillsService.ts`
+
+**Bundled catalog:** `src/main/services/skills/bundled-catalog.json`
+
+**Shared types:** `src/shared/skills/types.ts`
+
+**Validation:** `src/shared/skills/validation.ts`
+
+**Agent targets:** `src/shared/skills/agentTargets.ts`
+
+**Singleton export:**
+
+```typescript
+export const skillsService = new SkillsService();
+```
+
+## Related Services
+
+- **ProviderRegistry** (`src/shared/providers/registry.ts`): Defines CLI agent metadata
+- **SkillsIPC** (`src/main/ipc/skillsIpc.ts`): IPC handlers for renderer
+
+## See Also
+
+- [Agent Skills Standard](https://agentskills.io) - Official specification
+- [Skills UI Guide](/features/skills) - User-facing skills guide
+- [Provider Registry](/features/providers) - CLI agent definitions

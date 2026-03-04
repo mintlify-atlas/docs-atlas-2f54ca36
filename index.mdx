@@ -1,97 +1,308 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: Emdash Documentation
+description: Run multiple coding agents in parallel with isolated git worktrees
+mode: custom
 ---
 
-## Setting up
+<div className="relative overflow-hidden dark:bg-[#0f1117] bg-white">
+  {/* Hero Section */}
+  <div className="relative py-20 px-4 sm:px-6 lg:px-8">
+    <div className="max-w-7xl mx-auto">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center">
+        {/* Hero Content */}
+        <div className="lg:col-span-7">
+          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold dark:text-gray-100 text-gray-900 mb-6">
+            Orchestrate coding agents in parallel
+          </h1>
+          <p className="text-base sm:text-lg lg:text-xl dark:text-gray-400 text-gray-600 mb-8 max-w-2xl">
+            Emdash is an open-source Agentic Development Environment that runs multiple coding agents simultaneously in isolated git worktrees. Support for 22+ providers including Claude Code, Codex, and Qwen.
+          </p>
+          <div className="flex flex-wrap gap-4">
+            <a 
+              href="/quickstart" 
+              className="inline-flex items-center justify-center px-6 py-3 rounded-lg bg-[#8c9498] hover:bg-[#7a8287] text-white font-semibold transition-colors"
+            >
+              Get Started
+            </a>
+            <a 
+              href="/introduction" 
+              className="inline-flex items-center justify-center px-6 py-3 rounded-lg dark:border-[#27272a] border-gray-200 dark:bg-white/10 bg-gray-50 dark:hover:bg-white/20 hover:bg-gray-100 dark:text-gray-100 text-gray-900 font-semibold border transition-colors"
+            >
+              Learn More
+            </a>
+          </div>
+        </div>
+        
+        {/* Hero Image */}
+        <div className="lg:col-span-5">
+          <img 
+            src="https://github.com/user-attachments/assets/a2ecaf3c-9d84-40ca-9a8e-d4f612cc1c6f" 
+            alt="Emdash interface showing multiple parallel agents"
+            noZoom
+            className="w-full h-auto rounded-xl dark:border-[#27272a] border-gray-200 border shadow-2xl"
+          />
+        </div>
+      </div>
+    </div>
+  </div>
 
-Get your documentation site up and running in minutes.
+  {/* Quick Start Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <div className="mb-12">
+      <h2 className="text-2xl sm:text-3xl font-semibold dark:text-white text-gray-900 mb-3">
+        Quick start
+      </h2>
+      <p className="text-base dark:text-gray-400 text-gray-600">
+        Get Emdash running in minutes. Download, install your first agent, and start coding.
+      </p>
+    </div>
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+    <Steps>
+      <Step title="Download Emdash">
+        Download the latest release for your platform:
+        
+        <Tabs>
+          <Tab title="macOS">
+            ```bash
+            # Apple Silicon
+            curl -LO https://github.com/generalaction/emdash/releases/latest/download/emdash-arm64.dmg
+            
+            # Or via Homebrew
+            brew install --cask emdash
+            ```
+          </Tab>
+          <Tab title="Windows">
+            ```bash
+            # Download installer
+            curl -LO https://github.com/generalaction/emdash/releases/latest/download/emdash-x64.msi
+            ```
+          </Tab>
+          <Tab title="Linux">
+            ```bash
+            # AppImage
+            curl -LO https://github.com/generalaction/emdash/releases/latest/download/emdash-x86_64.AppImage
+            chmod +x emdash-x86_64.AppImage
+            
+            # Or Debian package
+            curl -LO https://github.com/generalaction/emdash/releases/latest/download/emdash-amd64.deb
+            sudo dpkg -i emdash-amd64.deb
+            ```
+          </Tab>
+        </Tabs>
+      </Step>
 
-## Make it yours
+      <Step title="Install a coding agent">
+        Install at least one CLI coding agent. Emdash supports 22+ providers:
 
-Design a docs site that looks great and empowers your users.
+        <CodeGroup>
+        ```bash Claude Code
+        curl -fsSL https://claude.ai/install.sh | bash
+        ```
+        ```bash Codex
+        npm install -g @openai/codex
+        ```
+        ```bash Qwen Code
+        npm install -g @qwen-code/qwen-code
+        ```
+        ```bash Amp
+        npm install -g @sourcegraph/amp@latest
+        ```
+        </CodeGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
-  </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
-  </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
-  </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
+        <Info>See the full list of [supported providers](/features/providers) and their installation commands.</Info>
+      </Step>
 
-## Create beautiful pages
+      <Step title="Open a project">
+        Launch Emdash and add a git repository:
+        
+        1. Click **Add Project** in the sidebar
+        2. Select a local git repository or clone a new one
+        3. Emdash will detect installed agents automatically
+        
+        <Note>Emdash works with any git repository. Each task runs in an isolated worktree to prevent conflicts.</Note>
+      </Step>
 
-Everything you need to create world-class documentation.
+      <Step title="Create your first task">
+        Start a new task with a coding agent:
+        
+        1. Click **New Task** 
+        2. Select your preferred agent (Claude, Codex, etc.)
+        3. Enter your prompt or attach a Linear/Jira ticket
+        4. Watch the agent work in real-time with full terminal access
+        
+        <Tip>Create multiple tasks to run agents in parallel — each gets its own isolated worktree.</Tip>
+      </Step>
+    </Steps>
+  </div>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+  {/* Features Grid */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <div className="mb-12">
+      <h2 className="text-2xl sm:text-3xl font-semibold dark:text-white text-gray-900 mb-3">
+        Key features
+      </h2>
+      <p className="text-base dark:text-gray-400 text-gray-600">
+        Everything you need to orchestrate AI coding agents at scale.
+      </p>
+    </div>
 
-## Need inspiration?
+    <CardGroup cols={2}>
+      <Card title="Parallel execution" icon="arrows-split-up-and-left" href="/concepts/parallel-execution">
+        Run multiple agents simultaneously in isolated git worktrees. No conflicts, no waiting.
+      </Card>
+      <Card title="22+ providers" icon="robot" href="/features/providers">
+        Support for Claude Code, Codex, Qwen, Amp, Cursor, Copilot, and 16 more CLI agents.
+      </Card>
+      <Card title="Remote development" icon="server" href="/features/ssh-remote">
+        Connect to remote machines via SSH. Run agents on powerful cloud servers.
+      </Card>
+      <Card title="Cross-agent skills" icon="puzzle-piece" href="/features/skills">
+        Share reusable skills across all agents using the Agent Skills standard.
+      </Card>
+      <Card title="Issue integrations" icon="ticket" href="/features/integrations">
+        Pass tickets from Linear, Jira, or GitHub Issues directly to your agents.
+      </Card>
+      <Card title="GitHub workflow" icon="code-pull-request" href="/features/github-workflow">
+        Review diffs, create PRs, track CI checks, and merge — all from one interface.
+      </Card>
+    </CardGroup>
+  </div>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+  {/* Explore by Topic */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <div className="mb-12">
+      <h2 className="text-2xl sm:text-3xl font-semibold dark:text-white text-gray-900 mb-3">
+        Explore by topic
+      </h2>
+      <p className="text-base dark:text-gray-400 text-gray-600">
+        Deep dive into core concepts and advanced features.
+      </p>
+    </div>
+
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <a href="/concepts/worktrees" className="group block rounded-2xl dark:border-[#27272a] border-gray-200 dark:hover:border-[#8c9498] hover:border-[#8c9498] border overflow-hidden no-underline transition-colors">
+        <div className="h-56 dark:bg-[#1a1d27] bg-gray-50 flex items-center justify-center overflow-hidden">
+          <div className="text-6xl">🌳</div>
+        </div>
+        <div className="p-6 dark:bg-[#1a1d27] bg-white">
+          <h3 className="text-base font-semibold dark:text-white text-gray-900 mb-2">Git worktrees</h3>
+          <p className="text-sm dark:text-gray-400 text-gray-600 mb-3">
+            Learn how Emdash uses git worktrees to isolate each agent's workspace.
+          </p>
+          <div className="flex items-center text-sm dark:text-gray-400 text-gray-600 dark:group-hover:text-[#8c9498] group-hover:text-[#8c9498] transition-colors">
+            <span>Read more</span>
+            <svg className="ml-2 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+        </div>
+      </a>
+
+      <a href="/concepts/agents" className="group block rounded-2xl dark:border-[#27272a] border-gray-200 dark:hover:border-[#8c9498] hover:border-[#8c9498] border overflow-hidden no-underline transition-colors">
+        <div className="h-56 dark:bg-[#1a1d27] bg-gray-50 flex items-center justify-center overflow-hidden">
+          <div className="text-6xl">🤖</div>
+        </div>
+        <div className="p-6 dark:bg-[#1a1d27] bg-white">
+          <h3 className="text-base font-semibold dark:text-white text-gray-900 mb-2">Agent providers</h3>
+          <p className="text-sm dark:text-gray-400 text-gray-600 mb-3">
+            Understand how Emdash detects, configures, and spawns different CLI agents.
+          </p>
+          <div className="flex items-center text-sm dark:text-gray-400 text-gray-600 dark:group-hover:text-[#8c9498] group-hover:text-[#8c9498] transition-colors">
+            <span>Read more</span>
+            <svg className="ml-2 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+        </div>
+      </a>
+
+      <a href="/features/ssh-remote" className="group block rounded-2xl dark:border-[#27272a] border-gray-200 dark:hover:border-[#8c9498] hover:border-[#8c9498] border overflow-hidden no-underline transition-colors">
+        <div className="h-56 dark:bg-[#1a1d27] bg-gray-50 flex items-center justify-center overflow-hidden">
+          <div className="text-6xl">🔐</div>
+        </div>
+        <div className="p-6 dark:bg-[#1a1d27] bg-white">
+          <h3 className="text-base font-semibold dark:text-white text-gray-900 mb-2">SSH remote development</h3>
+          <p className="text-sm dark:text-gray-400 text-gray-600 mb-3">
+            Connect to remote servers and run agents on powerful cloud machines.
+          </p>
+          <div className="flex items-center text-sm dark:text-gray-400 text-gray-600 dark:group-hover:text-[#8c9498] group-hover:text-[#8c9498] transition-colors">
+            <span>Read more</span>
+            <svg className="ml-2 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+        </div>
+      </a>
+
+      <a href="/api/architecture-overview" className="group block rounded-2xl dark:border-[#27272a] border-gray-200 dark:hover:border-[#8c9498] hover:border-[#8c9498] border overflow-hidden no-underline transition-colors">
+        <div className="h-56 dark:bg-[#1a1d27] bg-gray-50 flex items-center justify-center overflow-hidden">
+          <div className="text-6xl">⚙️</div>
+        </div>
+        <div className="p-6 dark:bg-[#1a1d27] bg-white">
+          <h3 className="text-base font-semibold dark:text-white text-gray-900 mb-2">Architecture deep dive</h3>
+          <p className="text-sm dark:text-gray-400 text-gray-600 mb-3">
+            Explore Emdash's Electron architecture, IPC layer, and service design.
+          </p>
+          <div className="flex items-center text-sm dark:text-gray-400 text-gray-600 dark:group-hover:text-[#8c9498] group-hover:text-[#8c9498] transition-colors">
+            <span>Read more</span>
+            <svg className="ml-2 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+        </div>
+      </a>
+    </div>
+  </div>
+
+  {/* Community Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <div className="mb-12">
+      <h2 className="text-2xl sm:text-3xl font-semibold dark:text-white text-gray-900 mb-3">
+        Community and support
+      </h2>
+      <p className="text-base dark:text-gray-400 text-gray-600">
+        Join the community, get help, and contribute to Emdash.
+      </p>
+    </div>
+
+    <CardGroup cols={3}>
+      <Card title="Discord" icon="discord" href="https://discord.gg/f2fv7YxuR2">
+        Join our Discord community to ask questions and share projects.
+      </Card>
+      <Card title="GitHub" icon="github" href="https://github.com/generalaction/emdash">
+        Star the repo, open issues, and contribute code or documentation.
+      </Card>
+      <Card title="Twitter" icon="twitter" href="https://twitter.com/emdashsh">
+        Follow @emdashsh for updates, tips, and announcements.
+      </Card>
+    </CardGroup>
+  </div>
+
+  {/* CTA Footer */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <div className="dark:bg-[#1a1d27] bg-gray-50 rounded-2xl p-8 sm:p-12 dark:border-[#27272a] border-gray-200 border">
+      <div className="max-w-3xl mx-auto text-center">
+        <h2 className="text-2xl sm:text-3xl font-semibold dark:text-white text-gray-900 mb-4">
+          Ready to get started?
+        </h2>
+        <p className="text-base dark:text-gray-400 text-gray-600 mb-8">
+          Download Emdash and start running multiple coding agents in parallel. Open source and free to use.
+        </p>
+        <div className="flex flex-wrap justify-center gap-4">
+          <a 
+            href="/installation" 
+            className="inline-flex items-center justify-center px-6 py-3 rounded-lg bg-[#8c9498] hover:bg-[#7a8287] text-white font-semibold transition-colors"
+          >
+            Download Emdash
+          </a>
+          <a 
+            href="https://github.com/generalaction/emdash" 
+            className="inline-flex items-center justify-center px-6 py-3 rounded-lg dark:border-[#27272a] border-gray-200 dark:bg-white/10 bg-white dark:hover:bg-white/20 hover:bg-gray-50 dark:text-gray-100 text-gray-900 font-semibold border transition-colors"
+          >
+            View on GitHub
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,473 @@
+---
+title: "WorktreeService"
+description: "Git worktree lifecycle management for task isolation"
+---
+
+The `WorktreeService` manages Git worktrees in Emdash, enabling each task to run in an isolated Git environment. It handles worktree creation, deletion, file preservation, and integrates with the WorktreePoolService for instant task starts.
+
+## Overview
+
+Worktrees are created at `../worktrees/{slugged-name}-{hash}` on branch `{prefix}/{slugged-name}-{hash}`. The branch prefix defaults to `emdash` and is configurable in app settings.
+
+**Key features:**
+
+- **Isolated environments**: Each task gets its own worktree with a unique branch
+- **File preservation**: Automatically copies gitignored files (`.env`, `.envrc`, etc.) from main repo to worktree
+- **Configurable patterns**: Custom preserve patterns via `.emdash.json` at project root
+- **Safety checks**: Prevents accidental removal of main repository
+- **Worktree pooling**: Integrates with WorktreePoolService for instant worktree claiming
+
+## Core Methods
+
+### createWorktree
+
+Create a new Git worktree for an agent task.
+
+```typescript
+async createWorktree(
+  projectPath: string,
+  taskName: string,
+  projectId: string,
+  baseRef?: string
+): Promise<WorktreeInfo>
+```
+
+<ParamField path="projectPath" type="string" required>
+  Absolute path to the main Git repository
+</ParamField>
+
+<ParamField path="taskName" type="string" required>
+  Human-readable task name (will be slugified for branch/directory names)
+</ParamField>
+
+<ParamField path="projectId" type="string" required>
+  Database project ID
+</ParamField>
+
+<ParamField path="baseRef" type="string">
+  Optional base branch override (e.g., `origin/develop`). Falls back to project settings if not provided.
+</ParamField>
+
+<ResponseField name="WorktreeInfo" type="object">
+  <ResponseField name="id" type="string">
+    Stable worktree ID (derived from absolute path hash)
+  </ResponseField>
+  <ResponseField name="name" type="string">
+    Original task name
+  </ResponseField>
+  <ResponseField name="branch" type="string">
+    Created branch name (e.g., `emdash/fix-bug-a7f`)
+  </ResponseField>
+  <ResponseField name="path" type="string">
+    Absolute path to worktree directory
+  </ResponseField>
+  <ResponseField name="projectId" type="string">
+    Associated project ID
+  </ResponseField>
+  <ResponseField name="status" type="'active' | 'paused' | 'completed' | 'error'">
+    Worktree status
+  </ResponseField>
+  <ResponseField name="createdAt" type="string">
+    ISO 8601 timestamp
+  </ResponseField>
+</ResponseField>
+
+**Process:**
+
+1. Generates slugified branch name: `{prefix}/{slugged-name}-{3-char-hash}`
+2. Resolves base ref from project settings or parameter
+3. Fetches latest base ref from remote (with fallback)
+4. Creates worktree via `git worktree add -b {branch} {path} {baseRef}`
+5. Preserves gitignored files from main repo to worktree
+6. Pushes new branch to remote (if `pushOnCreate` setting is enabled)
+
+**Example:**
+
+```typescript
+const worktree = await worktreeService.createWorktree(
+  '/Users/dev/my-project',
+  'Fix login bug',
+  'proj_abc123',
+  'origin/main'
+);
+
+// Result:
+// {
+//   id: 'wt-a1b2c3d4e5f6',
+//   name: 'Fix login bug',
+//   branch: 'emdash/fix-login-bug-a7f',
+//   path: '/Users/dev/worktrees/fix-login-bug-a7f',
+//   projectId: 'proj_abc123',
+//   status: 'active',
+//   createdAt: '2024-01-15T10:30:00Z'
+// }
+```
+
+### removeWorktree
+
+Remove a worktree and delete its branch (local and remote).
+
+```typescript
+async removeWorktree(
+  projectPath: string,
+  worktreeId: string,
+  worktreePath?: string,
+  branch?: string
+): Promise<void>
+```
+
+<ParamField path="projectPath" type="string" required>
+  Main repository path
+</ParamField>
+
+<ParamField path="worktreeId" type="string" required>
+  Worktree ID from `createWorktree`
+</ParamField>
+
+<ParamField path="worktreePath" type="string">
+  Optional explicit worktree path (used if worktree not in registry)
+</ParamField>
+
+<ParamField path="branch" type="string">
+  Optional branch name to delete
+</ParamField>
+
+**Safety checks:**
+
+- Verifies worktree path is not the main repository
+- Confirms path is actually a Git worktree (via `git worktree list --porcelain`)
+- Prevents removal of main worktree
+- Only removes directories matching worktree path patterns
+
+**Process:**
+
+1. Validates worktree is safe to remove
+2. Runs `git worktree remove --force {path}`
+3. Prunes stale worktree metadata: `git worktree prune`
+4. Deletes local branch: `git branch -D {branch}`
+5. Deletes remote branch: `git push origin --delete {branch}` (if remote exists)
+6. Cleans up filesystem directory
+
+### listWorktrees
+
+List all worktrees for a project, filtered by managed branch prefixes.
+
+```typescript
+async listWorktrees(projectPath: string): Promise<WorktreeInfo[]>
+```
+
+<ParamField path="projectPath" type="string" required>
+  Main repository path
+</ParamField>
+
+<ResponseField name="WorktreeInfo[]" type="array">
+  Array of worktree metadata objects
+</ResponseField>
+
+**Example:**
+
+```typescript
+const worktrees = await worktreeService.listWorktrees('/Users/dev/my-project');
+// [
+//   { id: 'wt-abc', name: 'feature-x', branch: 'emdash/feature-x-a1b', ... },
+//   { id: 'wt-def', name: 'bugfix-y', branch: 'emdash/bugfix-y-c2d', ... }
+// ]
+```
+
+### getWorktreeStatus
+
+Get the current Git status of a worktree (staged, unstaged, untracked files).
+
+```typescript
+async getWorktreeStatus(worktreePath: string): Promise<{
+  hasChanges: boolean;
+  stagedFiles: string[];
+  unstagedFiles: string[];
+  untrackedFiles: string[];
+}>
+```
+
+<ParamField path="worktreePath" type="string" required>
+  Absolute path to worktree
+</ParamField>
+
+**Example:**
+
+```typescript
+const status = await worktreeService.getWorktreeStatus(
+  '/Users/dev/worktrees/fix-login-bug-a7f'
+);
+// {
+//   hasChanges: true,
+//   stagedFiles: ['src/auth.ts'],
+//   unstagedFiles: ['src/login.ts'],
+//   untrackedFiles: ['test.log']
+// }
+```
+
+## File Preservation
+
+### preserveProjectFilesToWorktree
+
+Copy gitignored files from main repo to worktree using project-specific or default patterns.
+
+```typescript
+async preserveProjectFilesToWorktree(
+  projectPath: string,
+  worktreePath: string
+): Promise<PreserveResult>
+```
+
+<ParamField path="projectPath" type="string" required>
+  Source directory (main repository)
+</ParamField>
+
+<ParamField path="worktreePath" type="string" required>
+  Destination directory (worktree)
+</ParamField>
+
+<ResponseField name="PreserveResult" type="object">
+  <ResponseField name="copied" type="string[]">
+    Files successfully copied
+  </ResponseField>
+  <ResponseField name="skipped" type="string[]">
+    Files skipped (already exist in destination)
+  </ResponseField>
+</ResponseField>
+
+**Default preserve patterns:**
+
+```typescript
+[
+  '.env',
+  '.env.keys',
+  '.env.local',
+  '.env.*.local',
+  '.envrc',
+  'docker-compose.override.yml',
+]
+```
+
+**Excluded paths** (never preserved):
+
+```typescript
+[
+  'node_modules',
+  '.git',
+  'vendor',
+  '.cache',
+  'dist',
+  'build',
+  '.next',
+  '.nuxt',
+  '__pycache__',
+  '.venv',
+  'venv',
+]
+```
+
+### Custom Preserve Patterns
+
+Create `.emdash.json` at project root to customize:
+
+```json
+{
+  "preservePatterns": [
+    ".env",
+    ".claude/**",
+    "config/*.local.json"
+  ]
+}
+```
+
+**Pattern matching:**
+
+- Uses [minimatch](https://github.com/isaacs/minimatch) for glob patterns
+- Matches against both filename and full relative path
+- Automatically adds `**/` prefix for nested matches
+- Dot files (e.g., `.env`) are matched by default
+
+## Worktree Naming
+
+### Branch Name Format
+
+```
+{prefix}/{slugged-name}-{hash}
+```
+
+- **Prefix**: Configurable via `repository.branchPrefix` setting (default: `emdash`)
+- **Slugged name**: Task name converted to lowercase kebab-case
+- **Hash**: 3-character alphanumeric hash for uniqueness
+
+**Example:**
+
+```typescript
+// Task name: "Fix Login Bug"
+// Result: "emdash/fix-login-bug-a7f"
+```
+
+### Directory Name Format
+
+```
+../worktrees/{slugged-name}-{hash}
+```
+
+**Example:**
+
+```
+Project: /Users/dev/my-project
+Worktree: /Users/dev/worktrees/fix-login-bug-a7f
+```
+
+### Stable Worktree IDs
+
+Worktree IDs are generated from the absolute path hash:
+
+```typescript
+private stableIdFromPath(worktreePath: string): string {
+  const abs = path.resolve(worktreePath);
+  const h = crypto.createHash('sha1').update(abs).digest('hex').slice(0, 12);
+  return `wt-${h}`;
+}
+```
+
+## WorktreePoolService Integration
+
+### createWorktreeFromBranch
+
+Create a worktree from an existing branch (used by WorktreePoolService for instant claiming).
+
+```typescript
+async createWorktreeFromBranch(
+  projectPath: string,
+  taskName: string,
+  branchName: string,
+  projectId: string,
+  options?: { worktreePath?: string }
+): Promise<WorktreeInfo>
+```
+
+<ParamField path="branchName" type="string" required>
+  Existing Git branch to checkout
+</ParamField>
+
+<ParamField path="options.worktreePath" type="string">
+  Optional explicit worktree path (for pool claiming)
+</ParamField>
+
+**Used for:**
+
+- Claiming pre-created worktrees from the pool
+- Restoring worktrees after app restart
+- Checking out existing PR branches
+
+### registerWorktree
+
+Register an externally-created worktree (e.g., from WorktreePoolService).
+
+```typescript
+registerWorktree(worktree: WorktreeInfo): void
+```
+
+<ParamField path="worktree" type="WorktreeInfo" required>
+  Worktree metadata to register
+</ParamField>
+
+## Base Branch Resolution
+
+### fetchLatestBaseRef
+
+Resolve and fetch the latest base branch for a project.
+
+```typescript
+async fetchLatestBaseRef(
+  projectPath: string,
+  projectId: string
+): Promise<BaseRefInfo>
+```
+
+<ResponseField name="BaseRefInfo" type="object">
+  <ResponseField name="remote" type="string">
+    Remote name (e.g., `origin`) or empty string for local-only repos
+  </ResponseField>
+  <ResponseField name="branch" type="string">
+    Branch name (e.g., `main`)
+  </ResponseField>
+  <ResponseField name="fullRef" type="string">
+    Full ref (e.g., `origin/main` or `main` for local-only)
+  </ResponseField>
+</ResponseField>
+
+**Resolution order:**
+
+1. Explicit `baseRef` from project settings (e.g., `origin/develop`)
+2. Project's current branch from settings
+3. Remote default branch (via `git remote show origin`)
+4. Fallback: `origin/main` (or `main` for local-only repos)
+
+**Local-only repositories:**
+
+For repos without a remote, the service automatically:
+
+- Returns empty string for `remote`
+- Uses local branch names (e.g., `main` instead of `origin/main`)
+- Skips remote fetch/push operations
+- Validates local branch existence with `git rev-parse`
+
+## Error Handling
+
+### Common Errors
+
+**Worktree path already exists:**
+
+```typescript
+throw new Error(`Worktree directory already exists: ${worktreePath}`);
+```
+
+**Base branch not found:**
+
+```typescript
+throw new Error(`Failed to fetch ${baseRef}: remote ref does not exist`);
+```
+
+**Attempted to remove main repository:**
+
+```typescript
+log.error(`CRITICAL: Prevented removal of main repository! Path: ${pathToRemove}`);
+throw new Error('Cannot remove main repository - this is not a worktree');
+```
+
+### Error Tracking
+
+Worktree operations are tracked via PostHog telemetry:
+
+```typescript
+await errorTracking.captureWorktreeError(error, 'create', worktreePath, branchName, {
+  project_id: projectId,
+  project_path: projectPath,
+  task_name: taskName,
+  hash: hash,
+});
+```
+
+## Location
+
+**Source:** `src/main/services/WorktreeService.ts`
+
+**Singleton export:**
+
+```typescript
+export const worktreeService = new WorktreeService();
+```
+
+## Related Services
+
+- **WorktreePoolService** (`src/main/services/WorktreePoolService.ts`): Pre-creates worktrees for instant task starts
+- **DatabaseService** (`src/main/services/DatabaseService.ts`): Persists project/task metadata
+- **ProjectSettingsService** (`src/main/services/ProjectSettingsService.ts`): Stores base branch preferences
+
+## See Also
+
+- [WorktreePoolService](/concepts/worktrees) - Worktree pooling and instant claiming
+- [TaskLifecycleService](/api/main-process) - Task orchestration
+- [Project Configuration](/configuration/project-config) - `.emdash.json` options

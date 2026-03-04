@@ -1,0 +1,507 @@
+---
+title: GitHub workflow
+description: Automated PR creation, branch management, and CI check tracking via gh CLI
+---
+
+Emdash provides deep GitHub integration for the full pull request lifecycle: branch naming, PR generation with AI-drafted descriptions, CI/CD check tracking, and merge automation. All GitHub operations use the official `gh` CLI for reliability and security.
+
+<Info>
+GitHub integration is **optional** but highly recommended for teams using GitHub-based workflows.
+</Info>
+
+## Requirements
+
+1. **GitHub CLI (`gh`)** installed and authenticated
+2. Project must be a **GitHub repository**
+3. Remote must be named **`origin`** and point to GitHub
+
+<Steps>
+  <Step title="Install gh CLI">
+    ```bash
+    # macOS
+    brew install gh
+
+    # Windows
+    winget install GitHub.cli
+
+    # Linux
+    sudo apt install gh  # Debian/Ubuntu
+    sudo yum install gh  # RHEL/CentOS
+    ```
+  </Step>
+
+  <Step title="Authenticate with GitHub">
+    ```bash
+    gh auth login
+    ```
+
+    Or authenticate via Emdash:
+    1. Go to **Settings → GitHub**
+    2. Click **Connect with GitHub**
+    3. Follow the OAuth flow in your browser
+  </Step>
+
+  <Step title="Verify authentication">
+    ```bash
+    gh auth status
+    ```
+
+    You should see:
+    ```
+    ✓ Logged in to github.com as <username> (oauth_token)
+    ```
+  </Step>
+</Steps>
+
+<Note>
+Emdash automatically syncs `gh` CLI authentication when you connect via OAuth. If `gh auth status` fails, Emdash will re-authenticate the CLI with your stored token.
+</Note>
+
+## Branch naming
+
+Emdash creates isolated branches for each task:
+
+- **Format**: `{prefix}/{task-slug}-{hash}`
+- **Default prefix**: `emdash`
+- **Customizable**: Settings → Repository → Branch Prefix
+
+Example branches:
+- `emdash/fix-login-bug-a3f`
+- `emdash/add-dark-mode-7b2`
+- `feature/implement-search-9c4` (custom prefix)
+
+### Branch lifecycle
+
+1. **Creation**: Branch created when task starts (via `WorktreeService`)
+2. **Commits**: Agent commits changes to the branch
+3. **Push**: Emdash pushes to `origin` when creating a PR
+4. **Cleanup**: Branch can be deleted after PR merge (manual or via GitHub settings)
+
+## PR generation workflow
+
+The complete PR creation flow:
+
+<Steps>
+  <Step title="Review changes">
+    Open the **File Changes** panel to review diffs before creating a PR.
+  </Step>
+
+  <Step title="Generate PR content">
+    Click **Create PR**. Emdash:
+    1. Fetches git diff and commit messages
+    2. Attempts to generate title/description using an AI agent
+    3. Falls back to heuristic generation if agents fail
+
+    From `PrGenerationService.ts:23-72`:
+    ```typescript
+    async generatePrContent(
+      taskPath: string,
+      baseBranch: string = 'main',
+      preferredProviderId?: string | null
+    ): Promise<GeneratedPrContent> {
+      const { diff, commits, changedFiles } = await this.getGitContext(taskPath, baseBranch);
+
+      // Try providers in order: preferred → claude → others
+      const tryOrder: ProviderId[] = [];
+      if (preferredProviderId) tryOrder.push(preferredProviderId);
+      tryOrder.push('claude');
+      for (const id of PROVIDER_IDS) tryOrder.push(id);
+
+      for (const providerId of tryOrder) {
+        const result = await this.generateWithProvider(providerId, taskPath, diff, commits);
+        if (result) return result;
+      }
+
+      // Fallback to heuristics
+      return this.generateHeuristicContent(diff, commits, changedFiles);
+    }
+    ```
+  </Step>
+
+  <Step title="Edit and refine">
+    Review the generated PR title and description. Edit as needed.
+  </Step>
+
+  <Step title="Create PR via gh CLI">
+    Emdash runs:
+    ```bash
+    gh pr create \
+      --title "feat: add dark mode" \
+      --body "$(cat <<'EOF'
+    ## Summary
+    - Implemented dark mode toggle
+    - Added theme persistence
+    EOF
+    )" \
+      --base main \
+      --head emdash/add-dark-mode-7b2
+    ```
+  </Step>
+
+  <Step title="Track PR status">
+    The task panel now shows:
+    - PR number and link
+    - CI/CD check status
+    - Merge status
+  </Step>
+</Steps>
+
+## PR content generation
+
+### AI-generated (preferred)
+
+Emdash tries to use installed CLI agents to generate PR content:
+
+1. **Preferred agent** (if task has an agent ID)
+2. **Claude Code** (if installed) — uses `-p` print mode with `--output-format json`
+3. **Other agents** in registry order
+
+#### Claude Code example
+
+From `PrGenerationService.ts:289-326`:
+
+```typescript
+const args: string[] = [];
+const isClaudeProvider = providerId === 'claude';
+
+if (isClaudeProvider) {
+  // Use -p (print/non-interactive) mode with JSON output
+  args.push('-p', prompt, '--output-format', 'json');
+  if (provider!.autoApproveFlag) {
+    args.push(provider!.autoApproveFlag);
+  }
+} else {
+  // Standard agent invocation
+  if (provider!.defaultArgs?.length) {
+    args.push(...provider!.defaultArgs);
+  }
+  if (provider!.autoApproveFlag) {
+    args.push(provider!.autoApproveFlag);
+  }
+  if (provider!.initialPromptFlag !== undefined) {
+    if (provider!.initialPromptFlag) {
+      args.push(provider!.initialPromptFlag);
+    }
+    args.push(prompt);
+  }
+}
+
+const child = spawn(cliCommand, args, { cwd: taskPath });
+```
+
+#### Prompt format
+
+```
+Generate a concise PR title and description based on these changes:
+
+Commits:
+- feat: add dark mode toggle
+- fix: theme persistence bug
+
+Diff summary:
+ src/theme.ts     | 45 +++++++++++++++++++++++++++--
+ src/components/  | 12 +++++---
+ 2 files changed, 52 insertions(+), 5 deletions(-)
+
+Respond with ONLY valid JSON:
+{
+  "title": "feat: add dark mode",
+  "description": "## Changes\n- Added theme toggle\n- Fixed persistence"
+}
+```
+
+### Heuristic fallback
+
+If no agents are available or all fail, Emdash generates content from:
+
+- **First commit message** → PR title
+- **All commits** → "Changes" section
+- **Changed files** → "Files Changed" section
+- **Diff stats** → "Summary" section
+
+From `PrGenerationService.ts:516-653`:
+
+```typescript
+private generateHeuristicContent(
+  diff: string,
+  commits: string[],
+  changedFiles: string[]
+): GeneratedPrContent {
+  let title = 'chore: update code';
+  if (commits.length > 0) {
+    title = commits[0]; // Most recent commit
+    if (title.length > 72) {
+      title = title.substring(0, 69) + '...';
+    }
+  }
+
+  const descriptionParts: string[] = [];
+  if (commits.length > 0) {
+    descriptionParts.push('## Changes');
+    commits.forEach((commit) => {
+      descriptionParts.push(`- ${commit}`);
+    });
+  }
+
+  if (changedFiles.length > 0) {
+    descriptionParts.push('\n## Files Changed');
+    changedFiles.slice(0, 20).forEach((file) => {
+      descriptionParts.push(`- \`${file}\``);
+    });
+  }
+
+  return { title, description: descriptionParts.join('\n') };
+}
+```
+
+## CI/CD check tracking
+
+After creating a PR, Emdash can track CI/CD checks:
+
+<Steps>
+  <Step title="Fetch check status">
+    ```bash
+    gh pr checks <pr-number>
+    ```
+
+    Returns:
+    ```
+    ✓ CI / Build (push)       0s
+    ✓ CI / Test (push)        1m 23s
+    ✓ CI / Lint (push)        45s
+    ```
+  </Step>
+
+  <Step title="Display in UI">
+    The task panel shows:
+    - ✅ All checks passed
+    - ⏳ Checks in progress
+    - ❌ Failed checks with links to logs
+  </Step>
+
+  <Step title="Auto-refresh">
+    Emdash polls check status every 30s until all checks complete.
+  </Step>
+</Steps>
+
+<Info>
+Check tracking works with any CI/CD provider that integrates with GitHub (GitHub Actions, CircleCI, Travis, Jenkins, etc.).
+</Info>
+
+## PR review and merge
+
+### Viewing PRs
+
+List open PRs for a project:
+
+```typescript
+// From GitHubService.ts:763-802
+async getPullRequests(projectPath: string): Promise<GitHubPullRequest[]> {
+  const fields = [
+    'number',
+    'title',
+    'headRefName',
+    'baseRefName',
+    'url',
+    'isDraft',
+    'updatedAt',
+    'headRefOid',
+    'author',
+  ];
+  const { stdout } = await this.execGH(
+    `gh pr list --state open --json ${fields.join(',')}`,
+    { cwd: projectPath }
+  );
+  return JSON.parse(stdout || '[]');
+}
+```
+
+### Checking out PRs
+
+To review a PR locally:
+
+```typescript
+// From GitHubService.ts:808-845
+async ensurePullRequestBranch(
+  projectPath: string,
+  prNumber: number,
+  branchName: string
+): Promise<string> {
+  await this.execGH(
+    `gh pr checkout ${prNumber} --branch ${branchName} --force`,
+    { cwd: projectPath }
+  );
+  return branchName;
+}
+```
+
+This creates/updates a local branch that tracks the PR.
+
+### Merging PRs
+
+Merge via GitHub web UI or CLI:
+
+```bash
+gh pr merge <pr-number> --merge  # Standard merge
+gh pr merge <pr-number> --squash # Squash merge
+gh pr merge <pr-number> --rebase # Rebase merge
+```
+
+<Warning>
+Emdash does **not** auto-merge PRs. You must manually approve and merge via GitHub.
+</Warning>
+
+## Advanced features
+
+### Linking issues to PRs
+
+If a task has an attached issue (Linear/Jira/GitHub), Emdash can reference it in the PR description:
+
+```markdown
+## Summary
+- Implemented feature X
+- Fixed bug Y
+
+**Related**: Fixes #123
+```
+
+GitHub automatically links the PR to the issue.
+
+### Draft PRs
+
+Create a draft PR for work-in-progress:
+
+```bash
+gh pr create --draft --title "WIP: add feature" --body "..."
+```
+
+### PR templates
+
+GitHub PR templates (`.github/PULL_REQUEST_TEMPLATE.md`) are **not** automatically used by Emdash. To use a template:
+
+1. Copy template content
+2. Paste into Emdash's PR description field
+3. Fill in required sections
+
+### Repository creation
+
+Create a new GitHub repository from Emdash:
+
+```typescript
+// From GitHubService.ts:965-1001
+async createRepository(params: {
+  name: string;
+  description?: string;
+  owner: string;
+  isPrivate: boolean;
+}): Promise<{ url: string; defaultBranch: string; fullName: string }> {
+  const { name, description, owner, isPrivate } = params;
+  const visibilityFlag = isPrivate ? '--private' : '--public';
+  let command = `gh repo create ${owner}/${name} ${visibilityFlag} --confirm`;
+
+  if (description && description.trim()) {
+    command += ` --description ${JSON.stringify(description)}`;
+  }
+
+  await this.execGH(command);
+
+  const { stdout } = await this.execGH(
+    `gh repo view ${owner}/${name} --json name,nameWithOwner,url,defaultBranchRef`
+  );
+  const repoInfo = JSON.parse(stdout);
+
+  return {
+    url: repoInfo.url,
+    defaultBranch: repoInfo.defaultBranchRef?.name || 'main',
+    fullName: repoInfo.nameWithOwner,
+  };
+}
+```
+
+## Error handling
+
+### Automatic re-authentication
+
+If `gh` CLI authentication expires, Emdash automatically re-authenticates:
+
+```typescript
+// From GitHubService.ts:460-488
+private async execGH(command: string, options?: any) {
+  try {
+    return await execAsync(command, { encoding: 'utf8', ...options });
+  } catch (error: any) {
+    if (error.message && error.message.includes('not authenticated')) {
+      // Re-authenticate gh CLI with stored token
+      const token = await this.getStoredToken();
+      if (token) {
+        await this.authenticateGHCLI(token);
+        // Retry command
+        return await execAsync(command, { encoding: 'utf8', ...options });
+      }
+    }
+    throw error;
+  }
+}
+```
+
+### Common errors
+
+<AccordionGroup>
+  <Accordion title="gh: command not found">
+    **Symptom**: "GitHub CLI not installed"
+
+    **Solution**: Install `gh` CLI (see [Requirements](#requirements))
+  </Accordion>
+
+  <Accordion title="gh: not authenticated">
+    **Symptom**: "You are not authenticated with GitHub"
+
+    **Solutions**:
+    1. Run `gh auth login` in terminal
+    2. Or authenticate via Emdash: Settings → GitHub → Connect
+  </Accordion>
+
+  <Accordion title="PR creation failed: remote branch exists">
+    **Symptom**: "A branch named 'emdash/...' already exists"
+
+    **Solutions**:
+    1. Delete the remote branch: `git push origin --delete emdash/...`
+    2. Or use a different branch prefix in Settings
+  </Accordion>
+
+  <Accordion title="No commits to create PR">
+    **Symptom**: "There are no commits between main and emdash/..."
+
+    **Solution**: Commit changes before creating a PR
+  </Accordion>
+</AccordionGroup>
+
+## Best practices
+
+<CardGroup cols={2}>
+  <Card title="Review diffs before PR" icon="eye">
+    Always review the File Changes panel before creating a PR to catch unintended changes.
+  </Card>
+
+  <Card title="Use conventional commits" icon="book">
+    Follow [Conventional Commits](https://www.conventionalcommits.org/) for consistent PR titles:
+    - `feat:` New features
+    - `fix:` Bug fixes
+    - `chore:` Maintenance
+  </Card>
+
+  <Card title="Keep PRs focused" icon="bullseye">
+    One feature or bug fix per PR. Split large tasks into multiple PRs.
+  </Card>
+
+  <Card title="Link issues" icon="link">
+    Always link PRs to issues for better traceability.
+  </Card>
+</CardGroup>
+
+## Related resources
+
+- [GitHubService source](https://github.com/generalaction/emdash/blob/main/src/main/services/GitHubService.ts)
+- [PrGenerationService source](https://github.com/generalaction/emdash/blob/main/src/main/services/PrGenerationService.ts)
+- [GitHub CLI docs](https://cli.github.com/manual/)
+- [Diff review →](/features/diff-review)

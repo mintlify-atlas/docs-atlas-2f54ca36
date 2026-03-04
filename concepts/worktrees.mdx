@@ -1,0 +1,272 @@
+---
+title: "Git worktrees"
+description: "How Emdash uses git worktrees for agent isolation and instant task creation"
+---
+
+## What are git worktrees?
+
+Git worktrees allow you to check out multiple branches of the same repository simultaneously, each in its own working directory. Emdash leverages this feature to give each agent task its own isolated workspace.
+
+When you create a task in Emdash, it creates a new git worktree at `../worktrees/{task-name}-{hash}` with a corresponding branch named `{prefix}/{task-name}-{hash}` (where `prefix` defaults to `emdash`).
+
+## Why Emdash uses worktrees
+
+### Complete isolation
+
+Each agent runs in its own worktree, which means:
+- No interference between concurrent agent sessions
+- Each agent can modify files without affecting other tasks
+- Clean separation of changes per task
+- Safe parallel execution of multiple agents
+
+### Instant context switching
+
+You can switch between tasks without losing any work. Each worktree maintains its own:
+- Working directory state
+- Staged changes
+- Untracked files
+- File modifications
+
+### Native git integration
+
+Since worktrees are a native git feature, all git operations work seamlessly:
+- View diffs between tasks
+- Create pull requests directly from task branches
+- Merge or rebase task branches
+- Push changes to remote
+
+## Worktree directory structure
+
+Emdash creates worktrees in a predictable structure:
+
+```
+your-project/
+├── .git/
+├── src/
+└── ...
+
+worktrees/
+├── add-authentication-x7k/      # Task worktree
+│   ├── .git                     # Points to main repo
+│   ├── src/
+│   └── ...
+├── fix-login-bug-m3p/          # Another task worktree
+└── _reserve-a4f2c9/            # Pre-created reserve (pooling)
+```
+
+The naming convention is `{slugified-task-name}-{3-char-hash}` where:
+- Task names are slugified (lowercase, alphanumeric, hyphens)
+- A 3-character hash ensures uniqueness
+
+## Worktree pooling
+
+Emdash uses a **worktree pool** to eliminate the 3-7 second delay of creating worktrees on demand.
+
+### How pooling works
+
+1. **Pre-creation**: When you open a project, Emdash creates a "reserve" worktree in the background at `worktrees/_reserve-{hash}` on branch `_reserve/{hash}`
+
+2. **Instant claiming**: When you create a task, Emdash:
+   - Instantly renames the reserve worktree via `git worktree move`
+   - Renames the branch via `git branch -m`
+   - Replenishes the pool in the background
+
+3. **Background refresh**: Reserves are kept fresh by periodically running `git fetch --all --prune`
+
+From `WorktreePoolService.ts:211-220`:
+
+```typescript
+// Keep reserve refs fresh in the background so claim remains instant.
+await this.refreshRefsForReserveCreation(projectPath, projectId);
+
+// Resolve HEAD/local refs to remote tracking refs (freshly fetched)
+// so the worktree is created from up-to-date code, not a stale local branch.
+const resolvedRef = await this.resolveToRemoteRef(projectPath, baseRef);
+
+// Create the worktree
+await execFileAsync('git', ['worktree', 'add', '-b', reserveBranch, reservePath, resolvedRef], {
+  cwd: projectPath,
+});
+```
+
+### Reserve lifecycle
+
+- Reserves expire after **30 minutes** to prevent stale code
+- Stale reserves are cleaned up and recreated automatically
+- Orphaned reserves from crashes are cleaned up on app startup
+
+## File preservation
+
+Emdash preserves gitignored configuration files from your main repository to each worktree, ensuring agents have access to necessary secrets and config.
+
+### Default preserved patterns
+
+From `WorktreeService.ts:32-39`:
+
+```typescript
+const DEFAULT_PRESERVE_PATTERNS = [
+  '.env',
+  '.env.keys',
+  '.env.local',
+  '.env.*.local',
+  '.envrc',
+  'docker-compose.override.yml',
+];
+```
+
+These files are **copied** (not symlinked) from your main repo to each worktree when it's created.
+
+### Custom preservation patterns
+
+You can configure which files to preserve by creating a `.emdash.json` file at your project root:
+
+```json
+{
+  "preservePatterns": [
+    ".env*",
+    ".claude/**",
+    ".vscode/settings.json",
+    "docker-compose.override.yml"
+  ]
+}
+```
+
+From `WorktreeService.ts:119-141`:
+
+```typescript
+/**
+ * Read .emdash.json config from project root
+ */
+private readProjectConfig(projectPath: string): EmdashConfig | null {
+  try {
+    const configPath = path.join(projectPath, '.emdash.json');
+    if (!fs.existsSync(configPath)) {
+      return null;
+    }
+    const content = fs.readFileSync(configPath, 'utf8');
+    return JSON.parse(content) as EmdashConfig;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get preserve patterns for a project (config or defaults)
+ */
+private getPreservePatterns(projectPath: string): string[] {
+  const config = this.readProjectConfig(projectPath);
+  if (config?.preservePatterns && Array.isArray(config.preservePatterns)) {
+    return config.preservePatterns;
+  }
+  return DEFAULT_PRESERVE_PATTERNS;
+}
+```
+
+### Excluded paths
+
+Certain directories are never preserved to avoid copying large dependencies:
+
+```typescript
+const DEFAULT_EXCLUDE_PATTERNS = [
+  'node_modules',
+  '.git',
+  'vendor',
+  '.cache',
+  'dist',
+  'build',
+  '.next',
+  '.nuxt',
+  '__pycache__',
+  '.venv',
+  'venv',
+];
+```
+
+## Branch management
+
+### Branch naming
+
+By default, task branches use the `emdash` prefix: `emdash/task-name-x7k`
+
+You can customize this prefix in settings:
+
+```typescript
+const { getAppSettings } = await import('../settings');
+const settings = getAppSettings();
+const prefix = settings?.repository?.branchPrefix || 'emdash';
+branchName = `${prefix}/${sluggedName}-${hash}`;
+```
+
+### Automatic push
+
+When you create a task, Emdash automatically:
+1. Creates the local branch
+2. Pushes it to `origin` with upstream tracking
+3. Sets up the branch for easy PR creation
+
+This is configurable via `settings.repository.pushOnCreate`.
+
+From `WorktreeService.ts:273-289`:
+
+```typescript
+// Push the new branch to origin and set upstream so PRs work out of the box
+// Only if a remote exists
+if (settings?.repository?.pushOnCreate !== false && fetchedBaseRef.remote) {
+  try {
+    await execFileAsync(
+      'git',
+      ['push', '--set-upstream', fetchedBaseRef.remote, branchName],
+      {
+        cwd: worktreePath,
+      }
+    );
+    log.info(
+      `Pushed branch ${branchName} to ${fetchedBaseRef.remote} with upstream tracking`
+    );
+  } catch (pushErr) {
+    log.warn('Initial push of worktree branch failed:', pushErr as any);
+    // Don't fail worktree creation if push fails - user can push manually later
+  }
+}
+```
+
+## Cleanup
+
+When you delete a task, Emdash:
+1. Removes the worktree via `git worktree remove --force`
+2. Deletes the local branch via `git branch -D`
+3. Deletes the remote branch via `git push origin --delete`
+4. Removes the worktree directory from disk
+
+### Safety checks
+
+Emdash includes multiple safety checks to prevent accidental deletion of your main repository:
+
+```typescript
+// CRITICAL SAFETY CHECK: Prevent removing the main repository
+const normalizedPathToRemove = path.resolve(pathToRemove);
+const normalizedProjectPath = path.resolve(projectPath);
+
+if (normalizedPathToRemove === normalizedProjectPath) {
+  log.error(
+    `CRITICAL: Attempted to remove main repository! Path: ${pathToRemove}, Project: ${projectPath}`
+  );
+  throw new Error('Cannot remove main repository - this is not a worktree');
+}
+```
+
+## Local-only repositories
+
+Emdash fully supports repositories without remotes. For local-only repos:
+- Worktrees are created from local branches
+- No automatic pushing occurs
+- All operations work offline
+- Branch cleanup is local-only
+
+<Tip>
+You can switch between tasks instantly without worrying about losing work. Each worktree maintains its own state independently.
+</Tip>
+
+<Warning>
+Never manually delete worktree directories. Always use Emdash's task deletion or `git worktree remove` to ensure proper cleanup.
+</Warning>

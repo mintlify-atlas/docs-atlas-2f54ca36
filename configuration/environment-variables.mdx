@@ -1,0 +1,335 @@
+---
+title: Environment variables
+description: Configure Emdash behavior with environment variables
+---
+
+Emdash supports several optional environment variables to customize its behavior. All environment variables are optional and have sensible defaults.
+
+## Emdash environment variables
+
+These variables control core Emdash functionality.
+
+### EMDASH_DB_FILE
+
+Override the location of the SQLite database file.
+
+```bash
+export EMDASH_DB_FILE="/custom/path/to/emdash.db"
+```
+
+**Default locations:**
+- **macOS**: `~/Library/Application Support/emdash/emdash.db`
+- **Linux**: `~/.config/emdash/emdash.db`
+- **Windows**: `%APPDATA%\emdash\emdash.db`
+
+<Note>
+Useful for testing, backing up to a custom location, or running multiple isolated Emdash instances.
+</Note>
+
+### EMDASH_DISABLE_NATIVE_DB
+
+Disable the native SQLite driver and fall back to a JavaScript-based implementation.
+
+```bash
+export EMDASH_DISABLE_NATIVE_DB=1
+```
+
+**Use case:** Troubleshooting database issues or environments where native SQLite modules fail to load.
+
+### EMDASH_DISABLE_CLONE_CACHE
+
+Disable repository clone caching.
+
+```bash
+export EMDASH_DISABLE_CLONE_CACHE=1
+```
+
+**Use case:** Force fresh clones every time or troubleshoot clone-related issues.
+
+### EMDASH_DISABLE_PTY
+
+Disable PTY (pseudo-terminal) support. Primarily used in automated tests.
+
+```bash
+export EMDASH_DISABLE_PTY=1
+```
+
+<Warning>
+Disabling PTY will prevent terminal functionality from working. Only use this for testing purposes.
+</Warning>
+
+### TELEMETRY_ENABLED
+
+Control anonymous telemetry reporting to help improve Emdash.
+
+```bash
+# Disable telemetry
+export TELEMETRY_ENABLED=false
+
+# Enable telemetry (default)
+export TELEMETRY_ENABLED=true
+```
+
+Telemetry data includes:
+- Feature usage patterns
+- Error reports (anonymized)
+- Performance metrics
+
+No personal information, code, or credentials are collected.
+
+## Agent API key environment variables
+
+When Emdash spawns CLI agents, it passes through specific environment variables needed for authentication. These variables are defined in `AGENT_ENV_VARS` and are automatically forwarded to agent processes.
+
+### Anthropic (Claude)
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+Required for [Claude Code](https://www.anthropic.com/) CLI agent.
+
+### OpenAI
+
+```bash
+export OPENAI_API_KEY="sk-..."
+export OPENAI_BASE_URL="https://api.openai.com/v1"  # Optional
+```
+
+Required for OpenAI-based agents.
+
+### Google AI
+
+```bash
+export GOOGLE_API_KEY="AIza..."
+export GEMINI_API_KEY="AIza..."
+
+# For Google Cloud
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
+export GOOGLE_CLOUD_PROJECT="project-id"
+export GOOGLE_CLOUD_LOCATION="us-central1"
+```
+
+Required for Gemini and other Google AI services.
+
+### AWS (Bedrock)
+
+```bash
+export AWS_ACCESS_KEY_ID="AKIA..."
+export AWS_SECRET_ACCESS_KEY="..."
+export AWS_REGION="us-east-1"
+export AWS_DEFAULT_REGION="us-east-1"
+export AWS_SESSION_TOKEN="..."  # Optional
+export AWS_PROFILE="default"     # Optional
+```
+
+Required for AWS Bedrock and other AWS AI services.
+
+### Azure OpenAI
+
+```bash
+export AZURE_OPENAI_API_KEY="..."
+export AZURE_OPENAI_API_ENDPOINT="https://your-resource.openai.azure.com/"
+export AZURE_OPENAI_KEY="..."  # Alternative key name
+```
+
+### GitHub
+
+```bash
+export GITHUB_TOKEN="ghp_..."
+export GH_TOKEN="ghp_..."  # Alternative token name
+```
+
+Required for GitHub CLI (`gh`) operations like creating pull requests.
+
+### Other agent-specific variables
+
+```bash
+# Amp
+export AMP_API_KEY="..."
+
+# Autohand
+export AUTOHAND_API_KEY="..."
+
+# Augment
+export AUGMENT_SESSION_AUTH="..."
+
+# CodeBuff
+export CODEBUFF_API_KEY="..."
+
+# Copilot
+export COPILOT_CLI_TOKEN="..."
+
+# Cursor
+export CURSOR_API_KEY="..."
+
+# DashScope (Qwen)
+export DASHSCOPE_API_KEY="..."
+
+# Factory
+export FACTORY_API_KEY="..."
+
+# Kimi
+export KIMI_API_KEY="..."
+
+# Mistral
+export MISTRAL_API_KEY="..."
+
+# Moonshot
+export MOONSHOT_API_KEY="..."
+```
+
+### Proxy variables
+
+```bash
+export HTTP_PROXY="http://proxy.example.com:8080"
+export HTTPS_PROXY="http://proxy.example.com:8080"
+export NO_PROXY="localhost,127.0.0.1,.local"
+```
+
+Used by agents that respect standard proxy environment variables.
+
+## Codex agent variables
+
+Special configuration for the Codex agent.
+
+### CODEX_SANDBOX_MODE
+
+Enable sandbox mode for Codex agent execution.
+
+```bash
+export CODEX_SANDBOX_MODE=1
+```
+
+### CODEX_APPROVAL_POLICY
+
+Set approval policy for Codex operations.
+
+```bash
+export CODEX_APPROVAL_POLICY="auto"  # or "manual"
+```
+
+## SSH authentication
+
+### SSH_AUTH_SOCK
+
+Emdash automatically detects and passes through your SSH agent socket for remote development:
+
+```bash
+export SSH_AUTH_SOCK="/tmp/ssh-agent.sock"
+```
+
+This is typically set automatically by your system's SSH agent. Emdash preserves it when spawning shells and remote connections.
+
+## Display and desktop environment
+
+For GUI operations from within PTY sessions, Emdash forwards these variables:
+
+```bash
+export DISPLAY=":0"                                    # X11 display server
+export WAYLAND_DISPLAY="wayland-0"                     # Wayland compositor
+export XDG_RUNTIME_DIR="/run/user/1000"                # Contains sockets
+export XDG_CURRENT_DESKTOP="GNOME"                     # Desktop environment
+export XDG_SESSION_TYPE="wayland"                      # Session type
+export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/..."   # D-Bus
+export XAUTHORITY="/home/user/.Xauthority"            # X11 auth
+```
+
+These are automatically passed through when present and do not need manual configuration.
+
+## Setting environment variables
+
+### macOS/Linux
+
+Add to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
+
+```bash ~/.zshrc
+# Emdash configuration
+export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENAI_API_KEY="sk-..."
+export GITHUB_TOKEN="ghp_..."
+
+# Optional overrides
+export EMDASH_DB_FILE="$HOME/custom-emdash.db"
+export TELEMETRY_ENABLED=false
+```
+
+Then reload your shell:
+
+```bash
+source ~/.zshrc
+```
+
+### Windows (PowerShell)
+
+Add to your PowerShell profile (`$PROFILE`):
+
+```powershell
+# Emdash configuration
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+$env:OPENAI_API_KEY = "sk-..."
+$env:GITHUB_TOKEN = "ghp_..."
+
+# Optional overrides
+$env:EMDASH_DB_FILE = "C:\Users\YourName\custom-emdash.db"
+$env:TELEMETRY_ENABLED = "false"
+```
+
+### Windows (CMD)
+
+Set system environment variables:
+
+```cmd
+setx ANTHROPIC_API_KEY "sk-ant-..."
+setx OPENAI_API_KEY "sk-..."
+setx GITHUB_TOKEN "ghp_..."
+```
+
+<Note>
+Changes to environment variables require restarting Emdash to take effect.
+</Note>
+
+## Per-provider environment variables
+
+You can also set provider-specific environment variables in the application settings:
+
+```json settings.json
+{
+  "providerConfigs": {
+    "claude": {
+      "env": {
+        "ANTHROPIC_API_KEY": "sk-ant-...",
+        "CUSTOM_VAR": "value"
+      }
+    }
+  }
+}
+```
+
+See [Application settings - Provider configs](/configuration/settings) for details.
+
+## Security best practices
+
+<Warning>
+**Never commit API keys to version control.**
+
+Use environment variables or secure secret management tools instead.
+</Warning>
+
+1. **Use environment variables** for API keys instead of hardcoding them
+2. **Use `.env` files** for local development (add to `.gitignore`)
+3. **Use secret managers** for production environments (AWS Secrets Manager, etc.)
+4. **Rotate keys regularly** and revoke old keys
+5. **Use least-privilege keys** - only grant necessary permissions
+
+## Verifying environment variables
+
+To check which environment variables Emdash is using, you can:
+
+1. Open a terminal in Emdash
+2. Run `env | grep EMDASH` to see Emdash variables
+3. Run `env | grep API_KEY` to see agent API keys (if set)
+
+<Note>
+API keys are passed to agent processes but are **not** visible in the Emdash UI for security reasons.
+</Note>

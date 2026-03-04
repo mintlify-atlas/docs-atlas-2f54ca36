@@ -1,0 +1,389 @@
+---
+title: Cross-agent skills
+description: Install and manage reusable skills across all coding agents using the Agent Skills standard
+---
+
+Emdash implements the [Agent Skills](https://agentskills.io) standard, allowing you to install and share reusable skill packages across all supported coding agents. Skills are stored centrally and synced to each agent's native directory via symlinks.
+
+<Info>
+Skills are **cross-agent**: install once, use with Claude Code, Codex, Qwen, and any other supported provider.
+</Info>
+
+## What are skills?
+
+Skills are pre-built capabilities that agents can invoke to perform specific tasks:
+
+- **Linear integration**: Create and update Linear issues
+- **Documentation generation**: Generate API docs from code
+- **Code review**: Run automated code review checks
+- **Testing**: Generate unit tests for functions
+- **Deployment**: Deploy to cloud platforms
+
+Each skill is a directory containing a `SKILL.md` file with YAML frontmatter that defines the skill's metadata and instructions.
+
+## Skill format
+
+Skills follow the Agent Skills standard:
+
+```markdown
+---
+name: linear-integration
+description: Create and manage Linear issues from the CLI
+version: 1.0.0
+author: Example Inc.
+tags:
+  - project-management
+  - linear
+---
+
+# Linear Integration Skill
+
+This skill allows you to create, update, and search Linear issues directly from the agent.
+
+## Usage
+
+To create a new issue:
+...
+```
+
+<Note>
+The YAML frontmatter is parsed by `parseFrontmatter()` in `src/shared/skills/validation.ts`.
+</Note>
+
+## Skill storage
+
+### Central storage
+
+All skills are stored in a central directory:
+
+```
+~/.agentskills/
+├── .emdash/
+│   └── catalog-index.json     # Aggregated skill catalog
+├── linear-integration/
+│   └── SKILL.md
+├── code-review/
+│   └── SKILL.md
+└── deploy-vercel/
+    └── SKILL.md
+```
+
+### Agent sync
+
+Emdash symlinks skills into each agent's native directory:
+
+```
+~/.claude/commands/linear-integration -> ~/.agentskills/linear-integration
+~/.codex/skills/linear-integration -> ~/.agentskills/linear-integration
+~/.qwen/skills/linear-integration -> ~/.agentskills/linear-integration
+```
+
+**Supported agent directories** (from `src/shared/skills/agentTargets.ts`):
+
+```typescript
+export const agentTargets = [
+  {
+    id: 'claude',
+    name: 'Claude Code',
+    configDir: '~/.claude',
+    getSkillDir: (skillId) => `~/.claude/commands/${skillId}`,
+  },
+  {
+    id: 'codex',
+    name: 'Codex',
+    configDir: '~/.codex',
+    getSkillDir: (skillId) => `~/.codex/skills/${skillId}`,
+  },
+  // ... more agents
+];
+```
+
+<Warning>
+Emdash only syncs to agents that are **installed** (their `configDir` exists). If you install a new agent after adding skills, you'll need to manually sync or reinstall the skills.
+</Warning>
+
+## Installing skills
+
+<Steps>
+  <Step title="Open the skills catalog">
+    Go to **Settings → Skills** in Emdash.
+  </Step>
+
+  <Step title="Browse available skills">
+    The catalog shows skills from:
+    - **OpenAI skills repo**: Curated skills from OpenAI
+    - **Anthropic skills repo**: Skills from Anthropic
+    - **Local skills**: Skills you've created
+  </Step>
+
+  <Step title="Install a skill">
+    Click **Install** on any skill. Emdash will:
+    1. Download the skill's `SKILL.md` from GitHub
+    2. Save it to `~/.agentskills/<skill-id>/`
+    3. Symlink it to all detected agents
+    4. Update the catalog index
+  </Step>
+
+  <Step title="Use the skill in an agent">
+    In any task, your agent can now invoke the skill:
+    ```
+    Use the linear-integration skill to create a new issue for this bug
+    ```
+  </Step>
+</Steps>
+
+## Creating custom skills
+
+You can create your own skills for organization-specific workflows:
+
+<Steps>
+  <Step title="Create a skill via UI">
+    In **Settings → Skills**, click **Create New Skill**:
+    - **Name**: `my-custom-skill` (lowercase, hyphens only)
+    - **Description**: Brief description
+    - **Content**: Optional markdown instructions
+  </Step>
+
+  <Step title="Edit the SKILL.md">
+    Emdash generates a basic `SKILL.md` at `~/.agentskills/my-custom-skill/SKILL.md`. Edit it to add:
+    - Detailed instructions
+    - Usage examples
+    - Configuration options
+    - Input/output formats
+  </Step>
+
+  <Step title="Test with an agent">
+    Create a task and ask the agent to use your skill:
+    ```
+    Use my-custom-skill to process the data in data.json
+    ```
+  </Step>
+</Steps>
+
+### Validation
+
+Skill names must match: `^[a-z0-9][a-z0-9-]{0,63}$`
+
+```typescript
+// From src/shared/skills/validation.ts
+export function isValidSkillName(name: string): boolean {
+  return /^[a-z0-9][a-z0-9-]{0,63}$/.test(name);
+}
+```
+
+## Skill catalog
+
+Emdash maintains an **aggregated catalog** that merges skills from:
+
+1. **Remote sources** (fetched on refresh):
+   - OpenAI skills: `https://github.com/openai/skills/tree/main/skills/.curated`
+   - Anthropic skills: `https://github.com/anthropics/skills/tree/main/skills`
+
+2. **Local skills**: Skills in `~/.agentskills/`
+
+3. **Bundled fallback**: Offline catalog at `src/main/services/skills/bundled-catalog.json`
+
+The catalog is cached in-memory and on disk:
+
+```typescript
+// From SkillsService.ts:60-81
+async getCatalogIndex(): Promise<CatalogIndex> {
+  if (this.catalogCache) {
+    return this.mergeInstalledState(this.catalogCache);
+  }
+
+  // Try disk cache
+  try {
+    const data = await fs.promises.readFile(CATALOG_INDEX_PATH, 'utf-8');
+    const diskCache = JSON.parse(data) as CatalogIndex;
+    if (diskCache.version >= SkillsService.CATALOG_VERSION) {
+      this.catalogCache = diskCache;
+      return this.mergeInstalledState(this.catalogCache);
+    }
+  } catch {
+    // Fall back to bundled catalog
+  }
+
+  const bundled = await this.loadBundledCatalog();
+  this.catalogCache = bundled;
+  return this.mergeInstalledState(bundled);
+}
+```
+
+### Refreshing the catalog
+
+To fetch the latest skills from GitHub:
+
+1. Go to **Settings → Skills**
+2. Click **Refresh Catalog**
+3. Emdash fetches from GitHub and updates `~/.agentskills/.emdash/catalog-index.json`
+
+<Info>
+The catalog is versioned. Stale disk caches are automatically replaced with the bundled fallback.
+</Info>
+
+## Managing installed skills
+
+### List installed skills
+
+```typescript
+// From SkillsService.ts:127-183
+async getInstalledSkills(): Promise<CatalogSkill[]> {
+  // Scans ~/.agentskills/ and all agent skill directories
+  // Returns deduplicated list with metadata from SKILL.md
+}
+```
+
+### Uninstall a skill
+
+1. Go to **Settings → Skills**
+2. Click **Uninstall** on an installed skill
+3. Emdash:
+   - Removes symlinks from all agent directories
+   - Deletes `~/.agentskills/<skill-id>/`
+   - Updates the catalog
+
+### View skill details
+
+Click any skill to view its full `SKILL.md` content, including:
+- Description
+- Usage instructions
+- Configuration options
+- Examples
+
+## Syncing skills to agents
+
+Skills are **automatically synced** to all detected agents when:
+- You install a new skill
+- You create a custom skill
+- Emdash starts (scans for new agents)
+
+**Manual sync**:
+
+```typescript
+// From SkillsService.ts:346-375
+async syncToAgents(skillId: string): Promise<void> {
+  const skillDir = path.join(SKILLS_ROOT, skillId);
+  for (const target of agentTargets) {
+    try {
+      await fs.promises.access(target.configDir); // Agent installed?
+      const targetDir = target.getSkillDir(skillId);
+      await fs.promises.mkdir(path.dirname(targetDir), { recursive: true });
+      await fs.promises.symlink(skillDir, targetDir, 'junction');
+    } catch (err) {
+      // Agent not installed — skip
+    }
+  }
+}
+```
+
+<Warning>
+**Windows users**: Symlinks on Windows require either:
+- Developer Mode enabled (Windows 10/11)
+- Administrator privileges
+
+If symlinks fail, Emdash will log a warning but continue.
+</Warning>
+
+## Detected agents
+
+View which agents Emdash has detected:
+
+```typescript
+// From SkillsService.ts:397-415
+async getDetectedAgents(): Promise<DetectedAgent[]> {
+  const agents: DetectedAgent[] = [];
+  for (const target of agentTargets) {
+    let installed = false;
+    try {
+      await fs.promises.access(target.configDir);
+      installed = true;
+    } catch {
+      // Not installed
+    }
+    agents.push({
+      id: target.id,
+      name: target.name,
+      configDir: target.configDir,
+      installed,
+    });
+  }
+  return agents;
+}
+```
+
+In the UI (**Settings → Skills → Detected Agents**):
+- ✅ Green: Agent installed, skills synced
+- ⚠️ Yellow: Agent not installed, skills will sync when installed
+
+## Best practices
+
+<CardGroup cols={2}>
+  <Card title="Use descriptive names" icon="tag">
+    Skill names should clearly indicate their purpose:
+    - `linear-integration` ✅
+    - `skill-1` ❌
+  </Card>
+
+  <Card title="Version your skills" icon="code-branch">
+    Include version numbers in YAML frontmatter for tracking changes.
+  </Card>
+
+  <Card title="Document usage clearly" icon="book">
+    Provide examples and expected input/output formats in `SKILL.md`.
+  </Card>
+
+  <Card title="Test across agents" icon="flask">
+    Verify skills work with Claude, Codex, Qwen, etc. — each agent interprets instructions differently.
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Skill not appearing in agent">
+    **Symptom**: Installed skill not available in Claude/Codex/etc.
+
+    **Solutions**:
+    1. Check if agent is detected: **Settings → Skills → Detected Agents**
+    2. Verify symlink exists: `ls -la ~/.claude/commands/<skill-id>`
+    3. Manually sync: Reinstall the skill from the catalog
+    4. Restart the agent
+  </Accordion>
+
+  <Accordion title="Skill install fails">
+    **Symptom**: Error when installing skill from catalog
+
+    **Solutions**:
+    1. Check internet connection (GitHub fetch required)
+    2. Ensure `~/.agentskills/` directory is writable
+    3. Check Emdash logs for specific error
+    4. Try creating a custom skill with the same name to test permissions
+  </Accordion>
+
+  <Accordion title="Symlink creation fails (Windows)">
+    **Symptom**: "Failed to sync skill to &lt;agent&gt;: symlink error"
+
+    **Solutions**:
+    1. Enable Developer Mode: **Settings → Update & Security → For developers**
+    2. Or run Emdash as Administrator
+    3. Or manually copy skill directories instead of using symlinks
+  </Accordion>
+
+  <Accordion title="Catalog won't refresh">
+    **Symptom**: Clicking "Refresh Catalog" does nothing
+
+    **Solutions**:
+    1. Check internet connection
+    2. Verify GitHub is accessible (not blocked by firewall)
+    3. Check Emdash logs for HTTP errors
+    4. Delete `~/.agentskills/.emdash/catalog-index.json` and restart Emdash
+  </Accordion>
+</AccordionGroup>
+
+## Related resources
+
+- [Agent Skills standard](https://agentskills.io)
+- [SkillsService source](https://github.com/generalaction/emdash/blob/main/src/main/services/SkillsService.ts)
+- [Skills validation](https://github.com/generalaction/emdash/blob/main/src/shared/skills/validation.ts)
+- [Agent targets](https://github.com/generalaction/emdash/blob/main/src/shared/skills/agentTargets.ts)

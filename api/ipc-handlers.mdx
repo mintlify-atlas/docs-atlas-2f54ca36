@@ -1,0 +1,685 @@
+---
+title: IPC handlers
+description: Inter-process communication pattern, handler registry, and type safety
+---
+
+## Overview
+
+Emdash uses Electron's IPC (Inter-Process Communication) to connect the main process (Node.js backend) and renderer process (React UI). All communication flows through `window.electronAPI`, exposed via `contextBridge` in the preload script.
+
+**Key principles**:
+- Renderer has **no direct access** to Node.js APIs, filesystem, or native modules
+- All operations go through IPC handlers in the main process
+- IPC calls are **async** (Promise-based)
+- Type safety enforced with TypeScript declarations
+- Consistent response format: `{ success: boolean, data?: any, error?: string }`
+
+## IPC pattern
+
+### Handler registration (main process)
+
+All IPC handlers follow this pattern:
+
+```typescript
+// src/main/ipc/exampleIpc.ts
+import { ipcMain } from 'electron';
+import { exampleService } from '../services/ExampleService';
+import { log } from '../lib/logger';
+
+export function registerExampleIpc() {
+  // Handle request
+  ipcMain.handle('example:doSomething', async (_event, args: { id: string; value: number }) => {
+    try {
+      const result = await exampleService.doSomething(args.id, args.value);
+      return { success: true, data: result };
+    } catch (error) {
+      log.error('example:doSomething failed', { args, error });
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+
+  // Send events (main → renderer)
+  ipcMain.on('example:subscribe', (event, listenerId: string) => {
+    const listener = (data: any) => {
+      event.sender.send(`example:event:${listenerId}`, data);
+    };
+    exampleService.on('dataChanged', listener);
+    // Cleanup when window closes
+    event.sender.on('destroyed', () => {
+      exampleService.off('dataChanged', listener);
+    });
+  });
+}
+```
+
+**All handlers registered** in `src/main/ipc/index.ts`:
+
+```typescript
+import { registerAppIpc } from './appIpc';
+import { registerProjectIpc } from './projectIpc';
+import { registerPtyIpc } from '../services/ptyIpc';
+// ... 20+ more imports
+
+export function registerAllIpc() {
+  registerAppIpc();
+  registerDebugIpc();
+  registerTelemetryIpc();
+  registerUpdateIpc();
+  registerProjectIpc();
+  registerProjectSettingsIpc();
+  registerGithubIpc();
+  registerGitIpc();
+  registerHostPreviewIpc();
+  registerBrowserIpc();
+  registerNetIpc();
+  registerLineCommentsIpc();
+  registerPtyIpc();
+  registerWorktreeIpc();
+  registerFsIpc();
+  registerLifecycleIpc();
+  registerLinearIpc();
+  registerConnectionsIpc();
+  registerJiraIpc();
+  registerPlanLockIpc();
+  registerSshIpc();
+  registerSkillsIpc();
+}
+```
+
+Called from `main.ts` during app initialization:
+
+```typescript
+app.whenReady().then(() => {
+  // ...
+  registerAllIpc(); // Register all IPC handlers
+  createMainWindow();
+});
+```
+
+### Preload bridge
+
+`src/main/preload.ts` (~46KB, 1,400+ lines) exposes secure API to renderer:
+
+```typescript
+import { contextBridge, ipcRenderer } from 'electron';
+
+contextBridge.exposeInMainWorld('electronAPI', {
+  // Request/response
+  doSomething: (args: { id: string; value: number }) => 
+    ipcRenderer.invoke('example:doSomething', args),
+
+  // Event subscription
+  onEvent: (listener: (data: any) => void) => {
+    const subscription = (_event: any, data: any) => listener(data);
+    ipcRenderer.on('example:event', subscription);
+    // Return unsubscribe function
+    return () => ipcRenderer.removeListener('example:event', subscription);
+  },
+});
+```
+
+### Renderer usage
+
+```typescript
+// src/renderer/components/Example.tsx
+import { useEffect, useState } from 'react';
+
+const Example = () => {
+  const [data, setData] = useState(null);
+
+  // Call IPC handler
+  const handleAction = async () => {
+    const result = await window.electronAPI.doSomething({ id: '123', value: 42 });
+    if (result.success) {
+      setData(result.data);
+    } else {
+      console.error(result.error);
+    }
+  };
+
+  // Subscribe to events
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.onEvent((data) => {
+      console.log('Event received:', data);
+    });
+    return unsubscribe; // Cleanup on unmount
+  }, []);
+
+  return <button onClick={handleAction}>Do Something</button>;
+};
+```
+
+### Type safety
+
+All IPC methods must be declared in `src/renderer/types/electron-api.d.ts` (~1,870 lines):
+
+```typescript
+export {};
+
+declare global {
+  interface Window {
+    electronAPI: {
+      // App info
+      getAppVersion: () => Promise<string>;
+      getPlatform: () => Promise<string>;
+      
+      // Projects
+      getProjects: () => Promise<{ success: boolean; data?: Project[]; error?: string }>;
+      createProject: (args: { name: string; path: string }) => Promise<{
+        success: boolean;
+        data?: Project;
+        error?: string;
+      }>;
+      
+      // Tasks
+      getTasks: (args: { projectId: string }) => Promise<{
+        success: boolean;
+        data?: Task[];
+        error?: string;
+      }>;
+      createTask: (args: CreateTaskArgs) => Promise<{
+        success: boolean;
+        data?: Task;
+        error?: string;
+      }>;
+      deleteTask: (args: { taskId: string }) => Promise<{ success: boolean; error?: string }>;
+      
+      // PTY operations
+      ptyStart: (opts: PtyStartOpts) => Promise<{ ok: boolean; error?: string }>;
+      ptyInput: (args: { id: string; data: string }) => void;
+      ptyResize: (args: { id: string; cols: number; rows?: number }) => void;
+      ptyKill: (id: string) => void;
+      onPtyData: (id: string, listener: (data: string) => void) => () => void;
+      onPtyExit: (id: string, listener: (info: { exitCode: number }) => void) => () => void;
+      
+      // GitHub
+      githubAuth: () => Promise<{ success: boolean; error?: string }>;
+      githubCreatePR: (args: CreatePRArgs) => Promise<{ success: boolean; data?: PullRequest; error?: string }>;
+      
+      // ... 200+ more methods
+    };
+  }
+}
+```
+
+TypeScript enforces correct usage at compile time:
+
+```typescript
+// ✅ Correct - matches type definition
+const result = await window.electronAPI.createTask({
+  projectId: 'abc',
+  name: 'My task',
+  provider: 'claude',
+});
+
+// ❌ Error - missing required field 'name'
+const result = await window.electronAPI.createTask({
+  projectId: 'abc',
+});
+
+// ❌ Error - method doesn't exist
+await window.electronAPI.nonExistentMethod();
+```
+
+## IPC handler registry
+
+Emdash has **25+ IPC handler files** covering all functionality:
+
+### Core app/utility
+
+**appIpc.ts** (`src/main/ipc/appIpc.ts`, ~800 lines)
+- App version, platform info
+- Font list for terminal/editor
+- Undo/redo operations
+- System diagnostics
+
+Key handlers:
+```typescript
+ipcMain.handle('app:getVersion', async () => app.getVersion());
+ipcMain.handle('app:getPlatform', async () => process.platform);
+ipcMain.handle('app:listInstalledFonts', async (_event, { refresh }) => {
+  const fonts = await getFontList({ refresh });
+  return { success: true, fonts };
+});
+```
+
+**settingsIpc.ts** (`src/main/ipc/settingsIpc.ts`)
+- User preferences (theme, fonts, behavior)
+- Stored in `{userData}/settings.json`
+
+**telemetryIpc.ts** (`src/main/ipc/telemetryIpc.ts`)
+- Anonymous usage analytics (opt-in)
+- PostHog integration
+
+**updateIpc.ts** (`src/main/services/updateIpc.ts`)
+- Auto-update checks
+- Download and install updates
+- Release notes
+
+### Database
+
+**dbIpc.ts** (`src/main/ipc/dbIpc.ts`)
+- All database CRUD operations
+- Projects, tasks, conversations, messages
+- RPC-style interface using `createRPCRouter`
+
+```typescript
+export const databaseController = {
+  getProjects: async () => databaseService.getProjects(),
+  getProject: async ({ id }: { id: string }) => databaseService.getProject(id),
+  createProject: async (data: CreateProjectData) => databaseService.createProject(data),
+  // ... 50+ more methods
+};
+```
+
+### Projects and tasks
+
+**projectIpc.ts** (`src/main/ipc/projectIpc.ts`, ~200 lines)
+- Project operations (create, update, delete)
+- Git initialization
+- Project settings
+
+Key handlers:
+```typescript
+ipcMain.handle('project:create', async (_event, { name, path, isRemote, sshConnectionId }) => {
+  try {
+    const project = await projectService.create({ name, path, isRemote, sshConnectionId });
+    return { success: true, data: project };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+```
+
+**projectSettingsIpc.ts** (`src/main/ipc/projectSettingsIpc.ts`)
+- Per-project configuration
+- Branch prefix, preserve patterns, lifecycle scripts
+- Reads/writes `.emdash.json` at project root
+
+### Git and GitHub
+
+**gitIpc.ts** (`src/main/ipc/gitIpc.ts`, ~3,000 lines)
+- Git status, diff, commit, push, branch management
+- File changes, staging
+- Commit history
+
+Key handlers:
+```typescript
+ipcMain.handle('git:status', async (_event, { repoPath }) => {
+  const status = await gitService.getStatus(repoPath);
+  return { success: true, data: status };
+});
+
+ipcMain.handle('git:diff', async (_event, { repoPath, filePath, staged }) => {
+  const diff = await gitService.getDiff(repoPath, filePath, staged);
+  return { success: true, data: diff };
+});
+
+ipcMain.handle('git:commit', async (_event, { repoPath, message, files }) => {
+  await gitService.commit(repoPath, message, files);
+  return { success: true };
+});
+```
+
+**githubIpc.ts** (`src/main/ipc/githubIpc.ts`, ~600 lines)
+- GitHub authentication via `gh` CLI
+- PR creation, listing, status
+- Check runs (CI status)
+- Repository info
+
+Key handlers:
+```typescript
+ipcMain.handle('github:auth', async () => {
+  await githubService.authenticate();
+  return { success: true };
+});
+
+ipcMain.handle('github:createPR', async (_event, { repoPath, title, body, base, head }) => {
+  const pr = await githubService.createPR({ repoPath, title, body, base, head });
+  return { success: true, data: pr };
+});
+
+ipcMain.handle('github:getCheckRuns', async (_event, { owner, repo, ref }) => {
+  const checks = await githubService.getCheckRuns(owner, repo, ref);
+  return { success: true, data: checks };
+});
+```
+
+### PTY management
+
+**ptyIpc.ts** (`src/main/services/ptyIpc.ts`)
+- PTY lifecycle (start, input, resize, kill)
+- Terminal theme configuration
+- Session snapshots
+
+Key handlers:
+```typescript
+ipcMain.handle('pty:start', async (_event, opts: PtyStartOpts) => {
+  const { ok, error } = await ptyManager.startPty(opts);
+  return { ok, error };
+});
+
+ipcMain.on('pty:input', (_event, { id, data }: { id: string; data: string }) => {
+  ptyManager.sendInput(id, data);
+});
+
+ipcMain.on('pty:resize', (_event, { id, cols, rows }) => {
+  ptyManager.resize(id, cols, rows);
+});
+
+ipcMain.on('pty:kill', (_event, id: string) => {
+  ptyManager.killPty(id);
+});
+
+// Events (main → renderer)
+ptyManager.on('data', (id: string, data: string) => {
+  const win = BrowserWindow.getAllWindows()[0];
+  win?.webContents.send(`pty:data:${id}`, data);
+});
+
+ptyManager.on('exit', (id: string, exitCode: number) => {
+  const win = BrowserWindow.getAllWindows()[0];
+  win?.webContents.send(`pty:exit:${id}`, { exitCode });
+});
+```
+
+### Worktrees
+
+**worktreeIpc.ts** (`src/main/services/worktreeIpc.ts`)
+- Create, remove, list worktrees
+- Worktree pool management
+- Cleanup operations
+
+```typescript
+ipcMain.handle('worktree:create', async (_event, { projectPath, taskName, userId }) => {
+  const result = await worktreeService.createWorktree(projectPath, taskName, userId);
+  return { success: true, data: result };
+});
+
+ipcMain.handle('worktree:remove', async (_event, { projectPath, worktreePath }) => {
+  await worktreeService.removeWorktree(projectPath, worktreePath);
+  return { success: true };
+});
+
+ipcMain.handle('worktree:list', async (_event, { projectPath }) => {
+  const list = await worktreeService.listWorktrees(projectPath);
+  return { success: true, data: list };
+});
+```
+
+### SSH remote development
+
+**sshIpc.ts** (`src/main/ipc/sshIpc.ts`, ~1,000 lines)
+- SSH connection management
+- Credential storage (password, key, agent)
+- Host key verification
+- Remote file operations
+
+Key handlers:
+```typescript
+ipcMain.handle('ssh:connect', async (_event, { connectionId, host, username, authType, password, privateKey }) => {
+  await sshService.connect(connectionId, { host, username, authType, password, privateKey });
+  return { success: true };
+});
+
+ipcMain.handle('ssh:disconnect', async (_event, { connectionId }) => {
+  await sshService.disconnect(connectionId);
+  return { success: true };
+});
+
+ipcMain.handle('ssh:execCommand', async (_event, { connectionId, command, cwd }) => {
+  const result = await sshService.execCommand(connectionId, command, cwd);
+  return { success: true, data: result };
+});
+```
+
+### Skills
+
+**skillsIpc.ts** (`src/main/ipc/skillsIpc.ts`)
+- Install/uninstall skills
+- List available skills
+- Sync to agent directories
+- [Agent Skills](https://agentskills.io) standard
+
+```typescript
+ipcMain.handle('skills:list', async () => {
+  const skills = await skillsService.listSkills();
+  return { success: true, data: skills };
+});
+
+ipcMain.handle('skills:install', async (_event, { skillName, source }) => {
+  await skillsService.installSkill(skillName, source);
+  return { success: true };
+});
+
+ipcMain.handle('skills:syncToAgents', async (_event, { skillName }) => {
+  await skillsService.syncToAgents(skillName);
+  return { success: true };
+});
+```
+
+### Integrations
+
+**linearIpc.ts** (`src/main/ipc/linearIpc.ts`)
+- Linear issue sync
+- OAuth authentication
+
+**jiraIpc.ts** (`src/main/ipc/jiraIpc.ts`)
+- Jira issue sync
+- OAuth authentication
+
+**connectionsIpc.ts** (`src/main/ipc/connectionsIpc.ts`)
+- Detect installed CLI agents
+- Provider configuration
+
+```typescript
+ipcMain.handle('connections:getInstalledProviders', async () => {
+  const installed = await connectionsService.getInstalledProviders();
+  return { success: true, data: installed }; // ['claude', 'codex', 'qwen']
+});
+```
+
+### Filesystem
+
+**fsIpc.ts** (`src/main/services/fsIpc.ts`)
+- File reading, writing
+- Directory listing
+- Path resolution
+- Security: All paths validated with `isPathSafe()`
+
+```typescript
+ipcMain.handle('fs:readFile', async (_event, { path }) => {
+  if (!isPathSafe(path)) {
+    return { success: false, error: 'Path not allowed' };
+  }
+  const content = await fs.promises.readFile(path, 'utf-8');
+  return { success: true, data: content };
+});
+```
+
+## Request/response format
+
+All IPC handlers follow a consistent response format:
+
+### Success response
+
+```typescript
+{
+  success: true,
+  data: { /* result data */ }
+}
+```
+
+### Error response
+
+```typescript
+{
+  success: false,
+  error: "Error message describing what went wrong"
+}
+```
+
+### Variations
+
+Some handlers use `ok` instead of `success` (legacy PTY handlers):
+
+```typescript
+{
+  ok: true,
+  data: { /* result */ }
+}
+
+{
+  ok: false,
+  error: "Error message"
+}
+```
+
+## Event subscription pattern
+
+For real-time updates, handlers can emit events:
+
+### Main process (emit)
+
+```typescript
+// Service emits event
+exampleService.on('dataChanged', (data) => {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win) {
+    win.webContents.send('example:dataChanged', data);
+  }
+});
+```
+
+### Renderer (subscribe)
+
+```typescript
+// Component subscribes
+useEffect(() => {
+  const unsubscribe = window.electronAPI.onDataChanged((data) => {
+    console.log('Data changed:', data);
+  });
+  return unsubscribe; // Cleanup on unmount
+}, []);
+```
+
+### Preload (bridge)
+
+```typescript
+contextBridge.exposeInMainWorld('electronAPI', {
+  onDataChanged: (listener: (data: any) => void) => {
+    const subscription = (_event: any, data: any) => listener(data);
+    ipcRenderer.on('example:dataChanged', subscription);
+    return () => ipcRenderer.removeListener('example:dataChanged', subscription);
+  },
+});
+```
+
+## Adding new IPC handlers
+
+To add a new IPC handler:
+
+### 1. Create handler file
+
+```typescript
+// src/main/ipc/myFeatureIpc.ts
+import { ipcMain } from 'electron';
+import { myFeatureService } from '../services/MyFeatureService';
+import { log } from '../lib/logger';
+
+export function registerMyFeatureIpc() {
+  ipcMain.handle('myFeature:doSomething', async (_event, args: { id: string }) => {
+    try {
+      const result = await myFeatureService.doSomething(args.id);
+      return { success: true, data: result };
+    } catch (error) {
+      log.error('myFeature:doSomething failed', { args, error });
+      return { success: false, error: error.message };
+    }
+  });
+}
+```
+
+### 2. Register in index.ts
+
+```typescript
+// src/main/ipc/index.ts
+import { registerMyFeatureIpc } from './myFeatureIpc';
+
+export function registerAllIpc() {
+  // ... existing registrations
+  registerMyFeatureIpc(); // Add this line
+}
+```
+
+### 3. Add to preload.ts
+
+```typescript
+// src/main/preload.ts
+contextBridge.exposeInMainWorld('electronAPI', {
+  // ... existing methods
+  myFeatureDoSomething: (args: { id: string }) => 
+    ipcRenderer.invoke('myFeature:doSomething', args),
+});
+```
+
+### 4. Add type definition
+
+```typescript
+// src/renderer/types/electron-api.d.ts
+declare global {
+  interface Window {
+    electronAPI: {
+      // ... existing methods
+      myFeatureDoSomething: (args: { id: string }) => Promise<{
+        success: boolean;
+        data?: any;
+        error?: string;
+      }>;
+    };
+  }
+}
+```
+
+### 5. Use in renderer
+
+```typescript
+// src/renderer/components/MyComponent.tsx
+const result = await window.electronAPI.myFeatureDoSomething({ id: '123' });
+if (result.success) {
+  console.log(result.data);
+}
+```
+
+## Security considerations
+
+**Input validation**: Always validate input in handlers:
+
+```typescript
+ipcMain.handle('fs:readFile', async (_event, { path }) => {
+  // Validate path is within allowed directories
+  if (!isPathSafe(path)) {
+    return { success: false, error: 'Path not allowed' };
+  }
+  // ...
+});
+```
+
+**Error messages**: Never expose sensitive info in error messages:
+
+```typescript
+try {
+  // ...
+} catch (error) {
+  log.error('Internal error', { error }); // Log full error
+  return { success: false, error: 'Operation failed' }; // Generic message to renderer
+}
+```
+
+**Context isolation**: Renderer has zero direct access to Node.js APIs. All goes through IPC.
+
+## Next steps
+
+- [Main process](/api/main-process) - Deep dive into services behind IPC handlers
+- [Renderer process](/api/renderer-process) - How UI consumes IPC APIs
+- [Architecture overview](/api/architecture-overview) - High-level system design

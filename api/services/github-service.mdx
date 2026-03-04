@@ -1,0 +1,824 @@
+---
+title: "GitHubService"
+description: "GitHub integration via OAuth Device Flow and gh CLI"
+---
+
+The `GitHubService` handles GitHub authentication, repository management, and pull request operations in Emdash. It uses OAuth Device Flow for authentication and the `gh` CLI for Git/GitHub operations.
+
+## Overview
+
+**Key features:**
+
+- **OAuth Device Flow**: Browser-based authentication with automatic background polling
+- **gh CLI integration**: Leverages GitHub CLI for repository and PR operations
+- **Secure token storage**: Stores OAuth tokens in OS keychain (via keytar)
+- **Automatic re-auth**: Detects auth failures and re-authenticates gh CLI
+- **Issue search**: Search and view GitHub issues
+- **PR management**: List, checkout, and create pull requests
+
+**Authentication flow:**
+
+1. Request device code from GitHub
+2. Display code to user (browser opens to GitHub)
+3. Poll for token in background
+4. Store token in keychain
+5. Authenticate gh CLI with token
+
+## Authentication
+
+### startDeviceFlowAuth
+
+Start OAuth Device Flow authentication with automatic background polling.
+
+```typescript
+async startDeviceFlowAuth(): Promise<DeviceCodeResult>
+```
+
+<ResponseField name="DeviceCodeResult" type="object">
+  <ResponseField name="success" type="boolean">
+    Whether device code request succeeded
+  </ResponseField>
+  <ResponseField name="device_code" type="string">
+    Device code for polling (internal use)
+  </ResponseField>
+  <ResponseField name="user_code" type="string">
+    Code for user to enter on GitHub (e.g., `A1B2-C3D4`)
+  </ResponseField>
+  <ResponseField name="verification_uri" type="string">
+    GitHub verification URL (e.g., `https://github.com/login/device`)
+  </ResponseField>
+  <ResponseField name="expires_in" type="number">
+    Seconds until code expires (typically 900)
+  </ResponseField>
+  <ResponseField name="interval" type="number">
+    Seconds between polling attempts (typically 5)
+  </ResponseField>
+  <ResponseField name="error" type="string">
+    Error message (if request failed)
+  </ResponseField>
+</ResponseField>
+
+**Process:**
+
+1. Stops any existing polling loop
+2. Requests device code from GitHub
+3. Emits `github:auth:device-code` event to renderer (with 100ms delay)
+4. Starts background polling loop
+5. Returns device code result immediately
+
+**Events emitted to renderer:**
+
+- `github:auth:device-code`: Device code ready for display
+- `github:auth:polling`: Still waiting for user authorization
+- `github:auth:slow-down`: GitHub requested slower polling
+- `github:auth:success`: Authentication succeeded (token acquired)
+- `github:auth:error`: Authentication failed or expired
+- `github:auth:cancelled`: User cancelled authentication
+
+**Example:**
+
+```typescript
+const result = await githubService.startDeviceFlowAuth();
+
+if (result.success) {
+  console.log('Visit:', result.verification_uri);
+  console.log('Code:', result.user_code);
+  console.log('Polling in background...');
+  // Renderer will receive events as polling progresses
+} else {
+  console.error('Failed to start auth:', result.error);
+}
+```
+
+### pollDeviceToken
+
+Poll for access token using device code (called automatically by background loop).
+
+```typescript
+async pollDeviceToken(deviceCode: string, interval: number = 5): Promise<AuthResult>
+```
+
+<ParamField path="deviceCode" type="string" required>
+  Device code from `requestDeviceCode`
+</ParamField>
+
+<ParamField path="interval" type="number">
+  Polling interval in seconds
+</ParamField>
+
+<ResponseField name="AuthResult" type="object">
+  <ResponseField name="success" type="boolean">
+    Whether token was acquired
+  </ResponseField>
+  <ResponseField name="token" type="string">
+    OAuth access token
+  </ResponseField>
+  <ResponseField name="user" type="GitHubUser">
+    User information
+  </ResponseField>
+  <ResponseField name="error" type="string">
+    Error code or message
+  </ResponseField>
+</ResponseField>
+
+**Error codes:**
+
+- `authorization_pending`: User hasn't authorized yet (continue polling)
+- `slow_down`: GitHub wants slower polling (increase interval by 5s)
+- `expired_token`: Device code expired (stop polling)
+- `access_denied`: User denied authorization (stop polling)
+
+**Automatic actions on success:**
+
+1. Stores token in keychain
+2. Authenticates gh CLI with token
+3. Fetches user info from GitHub API
+4. Emits `github:auth:success` event to renderer
+
+### cancelAuth
+
+Cancel the authentication flow.
+
+```typescript
+cancelAuth(): void
+```
+
+**Example:**
+
+```typescript
+githubService.cancelAuth();
+// Stops polling and emits github:auth:cancelled
+```
+
+### isAuthenticated
+
+Check if user is authenticated (checks gh CLI and keychain).
+
+```typescript
+async isAuthenticated(): Promise<boolean>
+```
+
+**Example:**
+
+```typescript
+const authenticated = await githubService.isAuthenticated();
+if (authenticated) {
+  console.log('User is authenticated');
+} else {
+  console.log('User needs to authenticate');
+}
+```
+
+### logout
+
+Logout and clear stored token.
+
+```typescript
+async logout(): Promise<void>
+```
+
+**Process:**
+
+1. Logs out from gh CLI: `gh auth logout --hostname github.com`
+2. Removes token from keychain
+
+**Example:**
+
+```typescript
+await githubService.logout();
+console.log('Logged out');
+```
+
+## User Information
+
+### getCurrentUser
+
+Get the authenticated user's information.
+
+```typescript
+async getCurrentUser(): Promise<GitHubUser | null>
+```
+
+<ResponseField name="GitHubUser" type="object">
+  <ResponseField name="id" type="number">
+    GitHub user ID
+  </ResponseField>
+  <ResponseField name="login" type="string">
+    Username
+  </ResponseField>
+  <ResponseField name="name" type="string">
+    Full name
+  </ResponseField>
+  <ResponseField name="email" type="string">
+    Email address
+  </ResponseField>
+  <ResponseField name="avatar_url" type="string">
+    Avatar image URL
+  </ResponseField>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const user = await githubService.getCurrentUser();
+if (user) {
+  console.log(`Logged in as ${user.login} (${user.name})`);
+}
+```
+
+### getOwners
+
+Get available owners (user + organizations).
+
+```typescript
+async getOwners(): Promise<Array<{ login: string; type: 'User' | 'Organization' }>>
+```
+
+**Example:**
+
+```typescript
+const owners = await githubService.getOwners();
+for (const owner of owners) {
+  console.log(`${owner.login} (${owner.type})`);
+}
+// Output:
+// octocat (User)
+// github (Organization)
+```
+
+## Repository Operations
+
+### getRepositories
+
+Get the user's repositories (up to 100).
+
+```typescript
+async getRepositories(token: string): Promise<GitHubRepo[]>
+```
+
+<ParamField path="token" type="string" required>
+  OAuth token (unused, kept for API compatibility)
+</ParamField>
+
+<ResponseField name="GitHubRepo" type="object">
+  <ResponseField name="id" type="number">
+    Repository ID
+  </ResponseField>
+  <ResponseField name="name" type="string">
+    Repository name
+  </ResponseField>
+  <ResponseField name="full_name" type="string">
+    Owner/name (e.g., `user/repo`)
+  </ResponseField>
+  <ResponseField name="description" type="string">
+    Repository description
+  </ResponseField>
+  <ResponseField name="html_url" type="string">
+    GitHub repository URL
+  </ResponseField>
+  <ResponseField name="clone_url" type="string">
+    HTTPS clone URL
+  </ResponseField>
+  <ResponseField name="ssh_url" type="string">
+    SSH clone URL
+  </ResponseField>
+  <ResponseField name="default_branch" type="string">
+    Default branch name (e.g., `main`)
+  </ResponseField>
+  <ResponseField name="private" type="boolean">
+    Whether repository is private
+  </ResponseField>
+  <ResponseField name="updated_at" type="string">
+    Last update timestamp
+  </ResponseField>
+  <ResponseField name="language" type="string">
+    Primary language
+  </ResponseField>
+  <ResponseField name="stargazers_count" type="number">
+    Star count
+  </ResponseField>
+  <ResponseField name="forks_count" type="number">
+    Fork count
+  </ResponseField>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const repos = await githubService.getRepositories('');
+for (const repo of repos) {
+  console.log(`${repo.full_name}: ${repo.description}`);
+}
+```
+
+### createRepository
+
+Create a new GitHub repository.
+
+```typescript
+async createRepository(params: {
+  name: string;
+  description?: string;
+  owner: string;
+  isPrivate: boolean;
+}): Promise<{ url: string; defaultBranch: string; fullName: string }>
+```
+
+<ParamField path="name" type="string" required>
+  Repository name (validated via `validateRepositoryName`)
+</ParamField>
+
+<ParamField path="description" type="string">
+  Repository description
+</ParamField>
+
+<ParamField path="owner" type="string" required>
+  Owner login (user or organization)
+</ParamField>
+
+<ParamField path="isPrivate" type="boolean" required>
+  Whether repository should be private
+</ParamField>
+
+**Example:**
+
+```typescript
+const repo = await githubService.createRepository({
+  name: 'my-new-repo',
+  description: 'A cool project',
+  owner: 'octocat',
+  isPrivate: false,
+});
+
+console.log(`Created: ${repo.url}`);
+// https://github.com/octocat/my-new-repo
+```
+
+### validateRepositoryName
+
+Validate a repository name against GitHub rules.
+
+```typescript
+validateRepositoryName(name: string): { valid: boolean; error?: string }
+```
+
+**Rules:**
+
+- Required (non-empty)
+- Max 100 characters
+- Alphanumeric, hyphens, underscores, dots only
+- Cannot start/end with hyphen, dot, or underscore
+- Cannot be all dots
+- Cannot be a reserved name (e.g., `con`, `prn`, `aux`)
+
+**Example:**
+
+```typescript
+const result = githubService.validateRepositoryName('my-repo');
+if (result.valid) {
+  console.log('Valid name');
+} else {
+  console.error('Invalid:', result.error);
+}
+```
+
+### checkRepositoryExists
+
+Check if a repository exists.
+
+```typescript
+async checkRepositoryExists(owner: string, name: string): Promise<boolean>
+```
+
+**Example:**
+
+```typescript
+const exists = await githubService.checkRepositoryExists('octocat', 'Hello-World');
+if (exists) {
+  console.log('Repository exists');
+}
+```
+
+### cloneRepository
+
+Clone a repository to a local path.
+
+```typescript
+async cloneRepository(
+  repoUrl: string,
+  localPath: string
+): Promise<{ success: boolean; error?: string }>
+```
+
+<ParamField path="repoUrl" type="string" required>
+  HTTPS or SSH clone URL
+</ParamField>
+
+<ParamField path="localPath" type="string" required>
+  Absolute path to clone destination
+</ParamField>
+
+**Example:**
+
+```typescript
+const result = await githubService.cloneRepository(
+  'https://github.com/octocat/Hello-World.git',
+  '/Users/dev/Hello-World'
+);
+
+if (result.success) {
+  console.log('Cloned successfully');
+} else {
+  console.error('Clone failed:', result.error);
+}
+```
+
+### initializeNewProject
+
+Initialize a new project with README and initial commit.
+
+```typescript
+async initializeNewProject(params: {
+  repoUrl: string;
+  localPath: string;
+  name: string;
+  description?: string;
+}): Promise<void>
+```
+
+<ParamField path="repoUrl" type="string" required>
+  Repository URL
+</ParamField>
+
+<ParamField path="localPath" type="string" required>
+  Local project path
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  Project name
+</ParamField>
+
+<ParamField path="description" type="string">
+  Project description
+</ParamField>
+
+**Process:**
+
+1. Creates `README.md` with name and description
+2. Runs `git add README.md`
+3. Commits with message "Initial commit"
+4. Pushes to `origin/main` (or `origin/master` fallback)
+
+**Example:**
+
+```typescript
+await githubService.initializeNewProject({
+  repoUrl: 'https://github.com/octocat/my-project.git',
+  localPath: '/Users/dev/my-project',
+  name: 'My Project',
+  description: 'A cool project',
+});
+```
+
+## Pull Request Operations
+
+### getPullRequests
+
+List open pull requests for a repository.
+
+```typescript
+async getPullRequests(projectPath: string): Promise<GitHubPullRequest[]>
+```
+
+<ParamField path="projectPath" type="string" required>
+  Absolute path to Git repository
+</ParamField>
+
+<ResponseField name="GitHubPullRequest" type="object">
+  <ResponseField name="number" type="number">
+    PR number
+  </ResponseField>
+  <ResponseField name="title" type="string">
+    PR title
+  </ResponseField>
+  <ResponseField name="headRefName" type="string">
+    Head branch name
+  </ResponseField>
+  <ResponseField name="baseRefName" type="string">
+    Base branch name
+  </ResponseField>
+  <ResponseField name="url" type="string">
+    GitHub PR URL
+  </ResponseField>
+  <ResponseField name="isDraft" type="boolean">
+    Whether PR is a draft
+  </ResponseField>
+  <ResponseField name="updatedAt" type="string">
+    Last update timestamp
+  </ResponseField>
+  <ResponseField name="headRefOid" type="string">
+    Head commit SHA
+  </ResponseField>
+  <ResponseField name="author" type="object">
+    PR author metadata
+  </ResponseField>
+  <ResponseField name="headRepositoryOwner" type="object">
+    Head repository owner
+  </ResponseField>
+  <ResponseField name="headRepository" type="object">
+    Head repository metadata
+  </ResponseField>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const prs = await githubService.getPullRequests('/Users/dev/my-project');
+for (const pr of prs) {
+  console.log(`#${pr.number}: ${pr.title} (${pr.headRefName} → ${pr.baseRefName})`);
+}
+```
+
+### ensurePullRequestBranch
+
+Checkout a pull request branch locally (creates or updates).
+
+```typescript
+async ensurePullRequestBranch(
+  projectPath: string,
+  prNumber: number,
+  branchName: string
+): Promise<string>
+```
+
+<ParamField path="projectPath" type="string" required>
+  Repository path
+</ParamField>
+
+<ParamField path="prNumber" type="number" required>
+  PR number
+</ParamField>
+
+<ParamField path="branchName" type="string" required>
+  Local branch name (defaults to `pr/{number}` if empty)
+</ParamField>
+
+**Process:**
+
+1. Saves current branch
+2. Runs `gh pr checkout {prNumber} --branch {branchName} --force`
+3. Restores previous branch
+
+**Example:**
+
+```typescript
+const branch = await githubService.ensurePullRequestBranch(
+  '/Users/dev/my-project',
+  42,
+  'pr/fix-login'
+);
+
+console.log(`PR #42 checked out to: ${branch}`);
+// pr/fix-login
+```
+
+## Issue Operations
+
+### listIssues
+
+List open issues for a repository.
+
+```typescript
+async listIssues(
+  projectPath: string,
+  limit: number = 50
+): Promise<Array<{
+  number: number;
+  title: string;
+  url?: string;
+  state?: string;
+  updatedAt?: string | null;
+  assignees?: Array<{ login?: string; name?: string }>;
+  labels?: Array<{ name?: string }>;
+}>>
+```
+
+<ParamField path="projectPath" type="string" required>
+  Repository path
+</ParamField>
+
+<ParamField path="limit" type="number">
+  Max issues to return (1-200, default: 50)
+</ParamField>
+
+**Example:**
+
+```typescript
+const issues = await githubService.listIssues('/Users/dev/my-project', 20);
+for (const issue of issues) {
+  console.log(`#${issue.number}: ${issue.title}`);
+}
+```
+
+### searchIssues
+
+Search open issues in a repository.
+
+```typescript
+async searchIssues(
+  projectPath: string,
+  searchTerm: string,
+  limit: number = 20
+): Promise<Array<{
+  number: number;
+  title: string;
+  url?: string;
+  state?: string;
+  updatedAt?: string | null;
+  assignees?: Array<{ login?: string; name?: string }>;
+  labels?: Array<{ name?: string }>;
+}>>
+```
+
+<ParamField path="searchTerm" type="string" required>
+  Search query
+</ParamField>
+
+**Example:**
+
+```typescript
+const results = await githubService.searchIssues(
+  '/Users/dev/my-project',
+  'login bug',
+  10
+);
+
+for (const issue of results) {
+  console.log(`#${issue.number}: ${issue.title}`);
+}
+```
+
+### getIssue
+
+Get a single issue with body (for enrichment).
+
+```typescript
+async getIssue(
+  projectPath: string,
+  number: number
+): Promise<{
+  number: number;
+  title?: string;
+  body?: string;
+  url?: string;
+  state?: string;
+  updatedAt?: string | null;
+  assignees?: Array<{ login?: string; name?: string }>;
+  labels?: Array<{ name?: string }>;
+} | null>
+```
+
+**Example:**
+
+```typescript
+const issue = await githubService.getIssue('/Users/dev/my-project', 42);
+if (issue) {
+  console.log(`#${issue.number}: ${issue.title}`);
+  console.log(issue.body);
+}
+```
+
+## Security
+
+### Token Storage
+
+OAuth tokens are stored in the OS keychain via [keytar](https://github.com/atom/node-keytar):
+
+- **macOS**: Keychain Access
+- **Linux**: libsecret (GNOME Keyring, KWallet)
+- **Windows**: Credential Vault
+
+**Service name**: `emdash-github`
+
+**Account name**: `github-token`
+
+### gh CLI Authentication
+
+Tokens are passed to gh CLI via stdin (not shell interpolation) to prevent command injection:
+
+```typescript
+const child = spawn('gh', ['auth', 'login', '--with-token'], {
+  stdio: ['pipe', 'pipe', 'pipe'],
+});
+
+child.stdin.write(token);
+child.stdin.end();
+```
+
+### Automatic Re-authentication
+
+The `execGH` method detects auth failures and re-authenticates:
+
+```typescript
+try {
+  return await execAsync(command);
+} catch (error) {
+  if (error.message.includes('not authenticated')) {
+    const token = await this.getStoredToken();
+    if (token) {
+      await this.authenticateGHCLI(token);
+      return await execAsync(command); // Retry
+    }
+  }
+  throw error;
+}
+```
+
+## PrGenerationService
+
+The `PrGenerationService` is a companion service that generates PR titles and descriptions using CLI agents or heuristics.
+
+**Source:** `src/main/services/PrGenerationService.ts`
+
+### generatePrContent
+
+Generate PR title and description based on git changes.
+
+```typescript
+async generatePrContent(
+  taskPath: string,
+  baseBranch: string = 'main',
+  preferredProviderId?: string | null
+): Promise<GeneratedPrContent>
+```
+
+<ParamField path="taskPath" type="string" required>
+  Worktree or repository path
+</ParamField>
+
+<ParamField path="baseBranch" type="string">
+  Base branch to compare against (default: `main`)
+</ParamField>
+
+<ParamField path="preferredProviderId" type="string">
+  Optional provider ID to try first (e.g., from `task.agentId`)
+</ParamField>
+
+<ResponseField name="GeneratedPrContent" type="object">
+  <ResponseField name="title" type="string">
+    PR title (max 72 chars, conventional commit format)
+  </ResponseField>
+  <ResponseField name="description" type="string">
+    Markdown PR description
+  </ResponseField>
+</ResponseField>
+
+**Provider order:**
+
+1. Preferred provider (if specified and available)
+2. Claude (most reliable for structured output)
+3. Remaining providers (codex, qwen, etc.)
+4. Fallback to heuristics (commit messages + file analysis)
+
+**Example:**
+
+```typescript
+import { prGenerationService } from './services/PrGenerationService';
+
+const content = await prGenerationService.generatePrContent(
+  '/Users/dev/worktrees/fix-login-bug-a7f',
+  'origin/main',
+  'claude'
+);
+
+console.log('Title:', content.title);
+console.log('Description:');
+console.log(content.description);
+```
+
+## Location
+
+**Source:** `src/main/services/GitHubService.ts`
+
+**PR Generation:** `src/main/services/PrGenerationService.ts`
+
+**IPC Handlers:** `src/main/ipc/githubIpc.ts`
+
+**Singleton export:**
+
+```typescript
+export const githubService = new GitHubService();
+export const prGenerationService = new PrGenerationService();
+```
+
+## Related Services
+
+- **GitService** (`src/main/services/GitService.ts`): Low-level Git operations
+- **WorktreeService** (`src/main/services/WorktreeService.ts`): Worktree management
+- **ErrorTracking** (`src/main/errorTracking.ts`): Telemetry and error capture
+
+## See Also
+
+- [GitHub OAuth Device Flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow) - OAuth documentation
+- [GitHub CLI Manual](https://cli.github.com/manual/) - gh CLI reference
+- [PR Generation Service](/features/github-workflow) - PR content generation

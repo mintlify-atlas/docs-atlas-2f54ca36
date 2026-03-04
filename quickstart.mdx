@@ -1,80 +1,406 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get from zero to running your first coding agent task in under 5 minutes
 ---
 
-## Get started in three steps
+This guide walks you through running your first coding agent with Emdash. By the end, you'll have a working agent task running in an isolated git worktree.
 
-Get your documentation site running locally and make your first customization.
+<Note>
+  **Prerequisites**: You should have [Emdash installed](/installation) and at least one coding agent set up. If you haven't done this yet, start with the [Installation](/installation) guide.
+</Note>
 
-### Step 1: Set up your local environment
+## Step 1: Launch Emdash
+
+Open Emdash from your Applications folder (macOS), Start Menu (Windows), or application launcher (Linux).
+
+On first launch, you'll see the welcome screen with options to:
+
+- Add a local project
+- Clone a repository
+- Connect to a remote server via SSH
+
+## Step 2: Add a project
+
+Let's add a git repository for Emdash to work with.
+
+<Tabs>
+  <Tab title="Existing repository">
+    If you have a git repository on your machine:
+
+    1. Click **Add Project** in the sidebar (or the welcome screen)
+    2. Click **Browse** and navigate to your repository's root directory
+    3. Select the folder and click **Open**
+    4. Emdash will detect the repository and add it to your project list
+  </Tab>
+
+  <Tab title="Clone a new repository">
+    To clone a repository:
+
+    1. Click **Clone Repository** in the welcome screen
+    2. Enter the git clone URL (HTTPS or SSH)
+    3. Choose where to clone it on your machine
+    4. Click **Clone**
+    5. Emdash clones the repo and adds it to your project list
+  </Tab>
+
+  <Tab title="Quick test project">
+    For testing, create a simple git repository:
+
+    ```bash
+    # Create a test project
+    mkdir ~/test-emdash-project
+    cd ~/test-emdash-project
+    git init
+    echo "# Test Project" > README.md
+    git add README.md
+    git commit -m "Initial commit"
+    ```
+
+    Then add `~/test-emdash-project` to Emdash using the **Add Project** flow.
+  </Tab>
+</Tabs>
+
+<Info>
+  Emdash stores project metadata (name, path, settings) in its local SQLite database at `~/Library/Application Support/emdash/emdash.db` (macOS) or equivalent on other platforms.
+</Info>
+
+## Step 3: Verify agent detection
+
+Before creating a task, confirm Emdash detected your installed agents:
+
+1. Click **Settings** (gear icon in the sidebar)
+2. Navigate to **Agents** in the settings panel
+3. You should see checkmarks next to detected agents
+
+If your agent isn't detected:
+
+- Verify it's installed: run `<agent-name> --version` in your terminal
+- Click **Refresh Agents** in Settings
+- Restart Emdash
+
+<Warning>
+  If no agents are detected, you need to install at least one. See [Installation → Install coding agents](/installation) for quick install commands.
+</Warning>
+
+## Step 4: Create your first task
+
+Now let's create a task and run an agent.
+
+<Steps>
+  <Step title="Open the project">
+    Click on your project in the sidebar to open it. You'll see an empty task list.
+  </Step>
+
+  <Step title="Click New Task">
+    Click the **New Task** button in the top-right corner of the interface.
+  </Step>
+
+  <Step title="Configure the task">
+    In the task creation dialog:
+
+    - **Task name**: Give it a descriptive name (e.g., "Add health check endpoint")
+    - **Provider**: Select your installed agent (e.g., Claude Code, Codex, Qwen)
+    - **Initial prompt**: Enter what you want the agent to do
+
+    Example prompt:
+    ```
+    Add a /health endpoint that returns a JSON response with status: "ok" and timestamp.
+    ```
+  </Step>
+
+  <Step title="Create the task">
+    Click **Create Task**. Emdash will:
+
+    1. Claim a worktree from the pool (or create one if needed) at `../worktrees/<task-name-hash>/`
+    2. Create a new branch `emdash/<task-name-hash>`
+    3. Copy preserved files (`.env`, `.envrc`, etc.) from your main repo
+    4. Spawn the agent in a PTY (pseudo-terminal) in the worktree
+    5. Pass the initial prompt to the agent (via CLI flag or keystroke injection)
+  </Step>
+</Steps>
+
+<Tip>
+  The worktree pool eliminates the typical 3-7 second worktree creation delay. Emdash pre-creates worktrees in the background, so task starts are nearly instant.
+</Tip>
+
+## Step 5: Watch the agent work
+
+Once the task is created, you'll see the agent's terminal in real-time.
+
+### Terminal view
+
+The terminal shows exactly what the agent is doing:
+
+- Reading files
+- Planning changes
+- Editing code
+- Running tests
+- Asking for approval (if not in auto-approve mode)
+
+<Info>
+  Emdash uses `xterm.js` and `node-pty` to stream the agent's output with full terminal emulation. You get colors, cursor movement, and interactive prompts just like a native terminal.
+</Info>
+
+### Interact with the agent
+
+You can type in the terminal to interact with the agent:
+
+- Approve or reject changes (if the agent asks)
+- Answer follow-up questions
+- Send additional instructions
+- Use keyboard shortcuts (Ctrl+C, etc.)
+
+### Switch views
+
+Emdash provides multiple views:
+
+- **Terminal**: The agent's full terminal output
+- **Files**: Browse the worktree's file system
+- **Changes**: See a diff of modified files
+- **Chat** (for supported providers): Conversation history
+
+Switch between views using the tabs at the top of the task panel.
+
+## Step 6: Review changes
+
+When the agent finishes (or pauses), review what changed:
+
+1. Click the **Changes** tab in the task panel
+2. You'll see a list of modified files with diff summaries
+3. Click any file to see a side-by-side diff in Monaco editor
+
+The diff view shows:
+
+- **Left pane**: Original code (before agent changes)
+- **Right pane**: Modified code (after agent changes)
+- **Line numbers**: Aligned for easy comparison
+- **Syntax highlighting**: Based on file type
+
+<Note>
+  Changes are isolated in the worktree. Your main branch is untouched until you explicitly push and merge.
+</Note>
+
+## Step 7: Test the changes (optional)
+
+Want to test the agent's work before committing? You can:
+
+### Option 1: Open the worktree in your editor
+
+The worktree is a real directory on your filesystem:
+
+```bash
+# List all worktrees
+cd /path/to/your/project
+ls ../worktrees/
+
+# Open the worktree in your editor
+code ../worktrees/<task-name-hash>/
+```
+
+Make any manual changes you need, and the agent will see them in its terminal.
+
+### Option 2: Run commands in the Emdash terminal
+
+You can type commands directly in the agent's terminal:
+
+```bash
+# Run tests
+npm test
+
+# Start dev server
+npm run dev
+
+# Check git status
+git status
+```
+
+## Step 8: Commit and push
+
+Once you're happy with the changes, commit them:
+
+<Steps>
+  <Step title="Stage and commit">
+    In the terminal or Changes view, commit the agent's work:
+
+    ```bash
+    git add .
+    git commit -m "Add health check endpoint"
+    ```
+
+    Or use the **Commit** button in the Changes view (if available in your Emdash version).
+  </Step>
+
+  <Step title="Push the branch">
+    Push the worktree's branch to your remote:
+
+    ```bash
+    git push -u origin emdash/<task-name-hash>
+    ```
+  </Step>
+
+  <Step title="Create a pull request">
+    If you have GitHub CLI installed and authenticated:
+
+    ```bash
+    gh pr create --title "Add health check endpoint" --body "Implemented by Emdash agent"
+    ```
+
+    Or click **Create PR** in Emdash (if you have GitHub integration enabled).
+  </Step>
+</Steps>
+
+<Tip>
+  Emdash can create PRs for you directly from the UI using `gh` CLI. The PR view shows CI checks, reviews, and lets you merge without leaving Emdash.
+</Tip>
+
+## Step 9: Run another task (parallel execution)
+
+Here's where Emdash shines — you can run multiple agents in parallel:
+
+1. Click **New Task** again (your first task can still be running)
+2. Choose a different prompt or agent
+3. Watch both agents work simultaneously
+
+Each task gets its own isolated worktree and branch. No conflicts. No waiting.
+
+<Info>
+  You can run as many tasks in parallel as your system can handle. Each worktree shares the same `.git` directory, so they all see the same commit history without duplicating repository data.
+</Info>
+
+## Common workflows
+
+Now that you've run your first task, explore these common workflows:
+
+### Attach a Linear or Jira ticket
+
+Instead of typing a prompt manually:
+
+1. Click **Attach Issue** in the task creation dialog
+2. Select Linear, Jira, or GitHub Issues
+3. Paste the issue URL or ID
+4. Emdash fetches the issue details and passes them to the agent
+
+<Note>
+  You need to configure API credentials in Settings → Integrations first. See [Features → Integrations](/features/integrations) for setup instructions.
+</Note>
+
+### Use auto-approve mode
+
+Some agents ask for approval before making changes. To run fully autonomous:
+
+1. Enable **Auto-approve** when creating the task
+2. Emdash adds the provider's auto-approve flag (e.g., `--dangerously-skip-permissions` for Claude)
+3. The agent runs without interruptions
+
+<Warning>
+  Auto-approve mode lets the agent make unrestricted changes. Use with caution, especially on production codebases.
+</Warning>
+
+### Resume a previous conversation
+
+For providers that support resuming (Claude, Qwen, Continue):
+
+1. Open an existing task
+2. Click **Resume** or **New Conversation**
+3. Emdash spawns the agent with resume flags (e.g., `-c -r` for Claude)
+4. The agent continues from where it left off
+
+### Work on a remote server
+
+To run agents on a remote machine:
+
+1. Go to **Settings → SSH Connections**
+2. Add your server details (host, user, auth method)
+3. Add a remote project using the SSH connection
+4. Create tasks as usual — they run on the server
+
+See [Features → SSH Remote Development](/features/ssh-remote) for detailed setup.
+
+## Troubleshooting
 
 <AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
+  <Accordion title="Agent not starting">
+    If the agent fails to start:
+
+    1. Check the terminal output for error messages
+    2. Verify the agent is installed: `<cli> --version`
+    3. Check your PATH includes the agent's installation directory
+    4. Try running the agent manually in your terminal to isolate the issue
+    5. Check Settings → Agents for detection status
   </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
+
+  <Accordion title="Worktree creation failed">
+    If worktree creation fails:
+
+    1. Ensure the project is a valid git repository: `git status`
+    2. Check you don't have uncommitted changes that conflict
+    3. Verify there's disk space for the worktree
+    4. Check the parent directory (`../worktrees/`) is writable
+    5. Try running `git worktree list` in your main repo to see existing worktrees
+  </Accordion>
+
+  <Accordion title="Agent can't find environment variables">
+    If the agent complains about missing API keys or env vars:
+
+    1. Check your `.env` file is in the project root
+    2. Verify `.env` is listed in `.emdash.json` preserve patterns (default: preserved automatically)
+    3. Restart Emdash to pick up new environment variables
+    4. For custom patterns, add to `.emdash.json`:
+
+    ```json .emdash.json
+    {
+      "preservePatterns": [".env", ".env.local", ".envrc"]
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Terminal not showing output">
+    If the terminal is blank or frozen:
+
+    1. Check the terminal tab is selected
+    2. Try resizing the Emdash window (triggers PTY resize)
+    3. Restart the task
+    4. Check Emdash logs for PTY errors (Help → View Logs)
   </Accordion>
 </AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
+You've successfully run your first agent task with Emdash. Here's what to explore next:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Core Concepts" icon="book" href="/concepts/worktrees">
+    Deep dive into git worktrees, agents, and parallel execution.
+  </Card>
+  <Card title="Supported Providers" icon="robot" href="/features/providers">
+    Explore all 22+ supported agents with installation commands and feature matrices.
+  </Card>
+  <Card title="SSH Remote Development" icon="server" href="/features/ssh-remote">
+    Run agents on remote servers for more power and flexibility.
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/configuration/settings">
+    Customize Emdash settings, branch prefixes, and environment variables.
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Tips for success
+
+<Tip>
+  **Start small**: Test agents with small, well-defined tasks before running them on critical code. Review their work carefully until you trust their behavior.
+</Tip>
+
+<Tip>
+  **Use descriptive task names**: Task names become part of the branch name (`emdash/<task-name-hash>`). Clear names make it easier to track what each branch does.
+</Tip>
+
+<Tip>
+  **Leverage parallel execution**: Don't wait for one agent to finish before starting another. Run multiple tasks simultaneously to maximize productivity.
+</Tip>
+
+<Tip>
+  **Preserve critical files**: If your agents need specific config files, add them to `.emdash.json` preserve patterns so they're copied to every worktree.
+</Tip>
+
+<Tip>
+  **Integrate with your workflow**: Use Linear/Jira ticket integration to pass structured requirements directly to agents, and GitHub integration to automate PR creation and CI tracking.
+</Tip>

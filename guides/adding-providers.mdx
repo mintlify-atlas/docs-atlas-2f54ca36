@@ -1,0 +1,354 @@
+---
+title: Adding a new provider
+description: Step-by-step guide to adding CLI agents to Emdash's provider registry
+---
+
+This guide walks you through adding a new CLI coding agent (provider) to Emdash. Providers are defined in the central registry and automatically detected when installed on the user's system.
+
+## Understanding the provider system
+
+Emdash maintains a registry of CLI agents in `src/shared/providers/registry.ts`. Each provider is defined using a `ProviderDefinition` object that describes:
+
+- How to detect the agent on the user's system
+- How to spawn the agent's CLI process
+- How to pass initial prompts and flags
+- Which API keys to pass through
+
+<Note>
+Emdash currently supports 24 providers including Claude Code, Codex, Gemini, Qwen Code, Cursor, OpenCode, and many more.
+</Note>
+
+## Provider definition structure
+
+Here's the complete TypeScript interface:
+
+```typescript src/shared/providers/registry.ts
+export type ProviderDefinition = {
+  id: ProviderId;
+  name: string;
+  docUrl?: string;
+  installCommand?: string;
+  commands?: string[];
+  versionArgs?: string[];
+  detectable?: boolean;
+  cli?: string;
+  autoApproveFlag?: string;
+  initialPromptFlag?: string;
+  useKeystrokeInjection?: boolean;
+  resumeFlag?: string;
+  sessionIdFlag?: string;
+  defaultArgs?: string[];
+  planActivateCommand?: string;
+  autoStartCommand?: string;
+  icon?: string;
+  terminalOnly?: boolean;
+};
+```
+
+### Key fields explained
+
+<Steps>
+
+<Step title="Basic identification">
+
+**`id`** (required): Unique identifier for the provider (must be added to `PROVIDER_IDS` array)
+
+**`name`** (required): Display name shown in the UI
+
+**`icon`**: Filename of the provider's icon (placed in `src/renderer/assets/images/`)
+
+**`docUrl`**: Link to the provider's official documentation
+
+</Step>
+
+<Step title="Detection and installation">
+
+**`commands`**: Array of command names to check for detection (e.g., `['claude']`)
+
+**`versionArgs`**: Arguments to test command availability (e.g., `['--version']`)
+
+**`detectable`**: Set to `false` to skip auto-detection (default: `true`)
+
+**`installCommand`**: Shell command users can run to install the agent
+
+</Step>
+
+<Step title="CLI invocation">
+
+**`cli`**: Binary name to execute (often same as first command in `commands` array)
+
+**`defaultArgs`**: Arguments always passed when spawning (e.g., `['run', '-s']` for Goose)
+
+**`autoStartCommand`**: Alternative command to run instead of interactive CLI (e.g., Rovo Dev uses `'acli rovodev run'`)
+
+</Step>
+
+<Step title="Prompt delivery">
+
+**`initialPromptFlag`**: CLI flag to pass the initial prompt (e.g., `'-i'` for Gemini, `'-p'` for Continue)
+
+**`useKeystrokeInjection`**: Set to `true` for agents with no prompt flag — Emdash will type the prompt into the TUI after startup (used by Amp, OpenCode)
+
+<Warning>
+If both `initialPromptFlag` and `useKeystrokeInjection` are omitted, the prompt is passed as a positional argument.
+</Warning>
+
+</Step>
+
+<Step title="Auto-approval and session management">
+
+**`autoApproveFlag`**: Flag to skip interactive tool confirmations (e.g., `'--dangerously-skip-permissions'` for Claude, `'--yolo'` for Gemini)
+
+**`resumeFlag`**: Flag to resume previous session (e.g., `'-c -r'` for Claude, `'--resume'` for Continue)
+
+**`sessionIdFlag`**: Flag to assign a unique session ID per conversation (currently only Claude supports `'--session-id'`)
+
+</Step>
+
+</Steps>
+
+## Adding a new provider: complete example
+
+Let's add a fictional agent called "DevBot" to the registry.
+
+<Steps>
+
+<Step title="Add provider ID to the registry">
+
+First, add the ID to the `PROVIDER_IDS` array:
+
+```typescript src/shared/providers/registry.ts
+export const PROVIDER_IDS = [
+  'codex',
+  'claude',
+  // ... existing providers
+  'devbot', // Add your new provider
+] as const;
+```
+
+</Step>
+
+<Step title="Create the provider definition">
+
+Add the definition to the `PROVIDERS` array:
+
+```typescript src/shared/providers/registry.ts
+export const PROVIDERS: ProviderDefinition[] = [
+  // ... existing providers
+  {
+    id: 'devbot',
+    name: 'DevBot',
+    docUrl: 'https://devbot.dev/docs',
+    installCommand: 'npm install -g devbot-cli',
+    commands: ['devbot'],
+    versionArgs: ['--version'],
+    cli: 'devbot',
+    autoApproveFlag: '--auto-approve',
+    initialPromptFlag: '--prompt',
+    resumeFlag: '--continue',
+    icon: 'devbot.svg',
+    terminalOnly: true,
+  },
+];
+```
+
+</Step>
+
+<Step title="Add API keys to environment passthrough">
+
+If your agent requires API keys, add them to `AGENT_ENV_VARS` in `src/main/services/ptyManager.ts`:
+
+```typescript src/main/services/ptyManager.ts
+const AGENT_ENV_VARS = [
+  'AMP_API_KEY',
+  'ANTHROPIC_API_KEY',
+  // ... existing keys
+  'DEVBOT_API_KEY', // Add your provider's API key
+];
+```
+
+<Warning>
+This is critical! PTYs use a minimal environment that doesn't inherit `process.env`. Only keys in `AGENT_ENV_VARS` are passed through to agents.
+</Warning>
+
+</Step>
+
+<Step title="Add provider icon (optional)">
+
+Place your icon file in `src/renderer/assets/images/`:
+
+```bash
+cp devbot.svg workspace/source/src/renderer/assets/images/
+```
+
+Supported formats: `.svg`, `.png`
+
+</Step>
+
+</Steps>
+
+## Real-world examples
+
+### Example 1: Claude Code (full-featured)
+
+```typescript src/shared/providers/registry.ts
+{
+  id: 'claude',
+  name: 'Claude Code',
+  docUrl: 'https://docs.anthropic.com/claude/docs/claude-code',
+  installCommand: 'curl -fsSL https://claude.ai/install.sh | bash',
+  commands: ['claude'],
+  versionArgs: ['--version'],
+  cli: 'claude',
+  autoApproveFlag: '--dangerously-skip-permissions',
+  initialPromptFlag: '',
+  resumeFlag: '-c -r',
+  sessionIdFlag: '--session-id',
+  planActivateCommand: '/plan',
+  icon: 'claude.png',
+  terminalOnly: true,
+}
+```
+
+### Example 2: Amp (keystroke injection)
+
+```typescript src/shared/providers/registry.ts
+{
+  id: 'amp',
+  name: 'Amp',
+  docUrl: 'https://ampcode.com/manual#install',
+  installCommand: 'npm install -g @sourcegraph/amp@latest',
+  commands: ['amp'],
+  versionArgs: ['--version'],
+  cli: 'amp',
+  autoApproveFlag: '--dangerously-allow-all',
+  initialPromptFlag: '',
+  useKeystrokeInjection: true,
+  icon: 'ampcode.png',
+  terminalOnly: true,
+}
+```
+
+<Note>
+Amp has no CLI flag for passing prompts, so `useKeystrokeInjection: true` tells Emdash to type the prompt into the terminal after the agent starts.
+</Note>
+
+### Example 3: Goose (custom default args)
+
+```typescript src/shared/providers/registry.ts
+{
+  id: 'goose',
+  name: 'Goose',
+  docUrl: 'https://block.github.io/goose/docs/quickstart/',
+  installCommand:
+    'curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash',
+  detectable: false,
+  cli: 'goose',
+  defaultArgs: ['run', '-s'],
+  initialPromptFlag: '-t',
+  icon: 'goose.png',
+  terminalOnly: true,
+}
+```
+
+## Testing your provider
+
+<Steps>
+
+<Step title="Rebuild the app">
+
+```bash
+pnpm run build
+```
+
+</Step>
+
+<Step title="Verify detection">
+
+If the agent is installed on your system, Emdash should detect it automatically when you create a new task.
+
+Check the provider dropdown in the task creation modal.
+
+</Step>
+
+<Step title="Test task creation">
+
+1. Create a new task
+2. Select your provider from the dropdown
+3. Enter an initial prompt
+4. Verify the agent launches successfully
+
+</Step>
+
+<Step title="Test prompt delivery">
+
+Confirm that:
+
+- The initial prompt reaches the agent correctly
+- Auto-approval flags work (if configured)
+- Resume functionality works (if applicable)
+
+</Step>
+
+</Steps>
+
+## Advanced: Session isolation (Claude only)
+
+Claude Code is the only provider that currently supports session isolation via the `sessionIdFlag`.
+
+When configured, Emdash:
+
+1. Generates a deterministic UUID from the conversation ID
+2. Passes it via `--session-id` on startup
+3. Persists the session mapping to `{userData}/pty-session-map.json`
+4. Uses the same ID when resuming with `-c -r`
+
+This enables multiple conversation tabs in the same worktree without session conflicts.
+
+## Troubleshooting
+
+<Accordion title="Provider not detected">
+
+Ensure:
+
+- The binary is in the system `PATH`
+- The `commands` array matches the actual binary name
+- `detectable` is not set to `false`
+- The `versionArgs` command succeeds (e.g., `devbot --version`)
+
+</Accordion>
+
+<Accordion title="API keys not available to agent">
+
+Check that the key name is in `AGENT_ENV_VARS` in `src/main/services/ptyManager.ts`.
+
+The key must also be set in the user's shell environment.
+
+</Accordion>
+
+<Accordion title="Initial prompt not delivered">
+
+Verify:
+
+- `initialPromptFlag` matches the agent's CLI docs
+- If the agent has no prompt flag, set `useKeystrokeInjection: true`
+- The prompt is properly escaped (Emdash handles this automatically)
+
+</Accordion>
+
+<Accordion title="Auto-approve not working">
+
+Double-check the `autoApproveFlag` value against the agent's documentation. Flags vary widely:
+
+- Claude: `--dangerously-skip-permissions`
+- Gemini: `--yolo`
+- Cursor: `-f`
+- Copilot: `--allow-all-tools`
+
+</Accordion>
+
+## Next steps
+
+- [SSH connection setup](/guides/ssh-setup) — Run agents on remote machines
+- [Troubleshooting](/guides/troubleshooting) — Common issues and solutions
+- [Linear and Jira integration](/guides/linear-jira) — Link tasks to issues

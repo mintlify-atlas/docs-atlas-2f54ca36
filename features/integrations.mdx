@@ -1,0 +1,457 @@
+---
+title: Issue tracking integrations
+description: Connect Linear, Jira, and GitHub Issues to pass tickets directly to coding agents
+---
+
+Emdash integrates with **Linear**, **Jira**, and **GitHub Issues**, allowing you to attach issue tracker tickets to tasks and pass them directly to coding agents. Agents receive the full issue context (title, description, labels, etc.) to implement features or fix bugs.
+
+<Info>
+Integrations are **optional**. You can use Emdash without connecting any issue tracker.
+</Info>
+
+## Overview
+
+The issue tracking workflow:
+
+1. **Connect** your issue tracker in Settings
+2. **Browse** issues directly in Emdash
+3. **Attach** an issue to a task
+4. **Agent receives** the full issue context
+5. **Link PR** to the issue when creating a pull request
+
+## Supported platforms
+
+| Platform | Status | Authentication | Service |
+|----------|--------|----------------|----------|
+| [Linear](https://linear.app) | ✅ Supported | API key | `LinearService.ts` |
+| [Jira](https://www.atlassian.com/software/jira) | ✅ Supported | Site URL + API token | `JiraService.ts` |
+| [GitHub Issues](https://docs.github.com/en/issues) | ✅ Supported | `gh` CLI | `GitHubService.ts` |
+
+## Linear integration
+
+### Connecting Linear
+
+<Steps>
+  <Step title="Generate an API key">
+    1. Go to [Linear Settings → API](https://linear.app/settings/api)
+    2. Click **Create a personal API key**
+    3. Name it "Emdash" and copy the key
+  </Step>
+
+  <Step title="Add to Emdash">
+    1. Open **Settings → Integrations → Linear**
+    2. Paste your API key
+    3. Click **Connect**
+
+    Emdash validates the key by fetching your viewer info and workspace name.
+  </Step>
+
+  <Step title="Verify connection">
+    The connection status will show:
+    - ✅ **Connected** with your workspace name
+    - ⚠️ **Error** if authentication failed
+  </Step>
+</Steps>
+
+### Using Linear issues
+
+<Tabs>
+  <Tab title="Browse issues">
+    In any task, click **Attach Issue** and select **Linear** to browse:
+    - Open issues from your workspace
+    - Issues filtered by `state.type` not in `["completed", "cancelled"]`
+    - Up to 50 most recently updated issues
+  </Tab>
+
+  <Tab title="Search issues">
+    Use the search box to find issues by:
+    - Issue ID (e.g., `ENG-123`)
+    - Title keywords
+    - Description text
+
+    Emdash uses Linear's `searchIssues` GraphQL query for full-text search.
+  </Tab>
+
+  <Tab title="Attach to task">
+    Click an issue to attach it. The agent receives:
+    ```markdown
+    # Issue: ENG-123 - Implement dark mode
+
+    **Status**: In Progress
+    **Assignee**: Alice Smith
+    **Team**: Engineering
+    **Project**: Q1 2024
+
+    ## Description
+    We need to add a dark mode toggle to the app...
+
+    [View in Linear](https://linear.app/emdash/issue/ENG-123)
+    ```
+  </Tab>
+</Tabs>
+
+### Implementation details
+
+From `LinearService.ts:91-129`:
+
+```typescript
+async initialFetch(limit = 50): Promise<any[]> {
+  const token = await this.getStoredToken();
+  if (!token) {
+    throw new Error('Linear token not set. Connect Linear in settings first.');
+  }
+
+  const query = `
+    query ListIssues($limit: Int!) {
+      issues(
+        first: $limit,
+        orderBy: updatedAt,
+        filter: { state: { type: { nin: ["completed", "cancelled"] } } }
+      ) {
+        nodes {
+          id
+          identifier
+          title
+          description
+          url
+          state { name type color }
+          team { name key }
+          project { name }
+          assignee { displayName name }
+          updatedAt
+        }
+      }
+    }
+  `;
+
+  const response = await this.graphql<{ issues: { nodes: any[] } }>(token, query, {
+    limit: sanitizedLimit,
+  });
+
+  return response?.issues?.nodes ?? [];
+}
+```
+
+<Note>
+Linear tokens are stored securely in your OS keychain via Keytar (service name: `emdash-linear`).
+</Note>
+
+## Jira integration
+
+### Connecting Jira
+
+<Steps>
+  <Step title="Generate an API token">
+    1. Go to [Atlassian API Tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
+    2. Click **Create API token**
+    3. Name it "Emdash" and copy the token
+  </Step>
+
+  <Step title="Find your site URL">
+    Your Jira site URL is the domain you use to access Jira:
+    - Example: `https://your-company.atlassian.net`
+  </Step>
+
+  <Step title="Add to Emdash">
+    1. Open **Settings → Integrations → Jira**
+    2. Enter:
+       - **Site URL**: `https://your-company.atlassian.net`
+       - **Email**: Your Atlassian account email
+       - **API Token**: The token from step 1
+    3. Click **Connect**
+
+    Emdash validates by calling `/rest/api/3/myself`.
+  </Step>
+</Steps>
+
+### Using Jira issues
+
+<Tabs>
+  <Tab title="Browse issues">
+    Emdash fetches issues using fallback JQL queries to handle limited permissions:
+    1. `assignee = currentUser() ORDER BY updated DESC`
+    2. `reporter = currentUser() ORDER BY updated DESC`
+    3. `ORDER BY updated DESC` (all issues you can see)
+
+    If all queries fail, falls back to issue picker for recently viewed issues.
+  </Tab>
+
+  <Tab title="Search issues">
+    Search by:
+    - Issue key (e.g., `PROJ-123`) — direct lookup
+    - Text query — JQL `text ~` search
+    - Issue number (e.g., `123`) — tries all project keys
+
+    From `JiraService.ts:254-281`:
+    ```typescript
+    async smartSearchIssues(searchTerm: string, limit = 20): Promise<any[]> {
+      const term = (searchTerm || '').trim();
+      if (!term) return [];
+
+      const looksLikeKey = /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(term);
+      if (looksLikeKey) {
+        // Direct fetch by key
+        try {
+          const issue = await this.getIssueByKey(siteUrl, email, token, term.toUpperCase());
+          if (issue) return this.normalizeIssues(siteUrl, [issue]);
+        } catch {
+          // Fall back to JQL search
+        }
+      }
+
+      // Build JQL safely (escape quotes)
+      const sanitized = term.replace(/"/g, '\\"');
+      const jql = `text ~ "${sanitized}"`;
+      const data = await this.searchRaw(siteUrl, email, token, jql, limit);
+      return this.normalizeIssues(siteUrl, data);
+    }
+    ```
+  </Tab>
+
+  <Tab title="Attach to task">
+    The agent receives normalized issue data:
+    ```markdown
+    # Issue: PROJ-123 - Fix login bug
+
+    **Status**: In Progress
+    **Assignee**: Bob Johnson
+    **Project**: Platform
+
+    ## Description
+    Users are unable to log in after password reset...
+
+    [View in Jira](https://your-company.atlassian.net/browse/PROJ-123)
+    ```
+  </Tab>
+</Tabs>
+
+### ADF description handling
+
+Jira uses Atlassian Document Format (ADF) for rich text. Emdash flattens it to plain text:
+
+```typescript
+// From JiraService.ts:335-351
+private static flattenAdf(node: any): string {
+  if (!node) return '';
+  if (typeof node === 'string') return node;
+  if (node.type === 'text') return node.text || '';
+  if (Array.isArray(node.content)) {
+    const parts = node.content.map((c: any) => JiraService.flattenAdf(c));
+    if (['doc', 'bulletList', 'orderedList'].includes(node.type)) {
+      return parts.join('\n');
+    }
+    if (['paragraph', 'heading', 'listItem'].includes(node.type)) {
+      return parts.join('');
+    }
+    return parts.join('');
+  }
+  return '';
+}
+```
+
+<Note>
+Jira credentials are stored in:
+- **API token**: OS keychain (Keytar, service name: `emdash-jira`)
+- **Site URL + email**: `<userData>/jira.json`
+</Note>
+
+## GitHub Issues integration
+
+### Connecting GitHub Issues
+
+GitHub Issues authentication piggybacks on GitHub CLI:
+
+<Steps>
+  <Step title="Install GitHub CLI">
+    ```bash
+    # macOS
+    brew install gh
+
+    # Windows
+    winget install GitHub.cli
+
+    # Linux
+    sudo apt install gh  # Debian/Ubuntu
+    sudo yum install gh  # RHEL/CentOS
+    ```
+  </Step>
+
+  <Step title="Authenticate with GitHub">
+    ```bash
+    gh auth login
+    ```
+
+    Follow the prompts to authenticate via browser or token.
+  </Step>
+
+  <Step title="Verify in Emdash">
+    Open **Settings → GitHub**. If authenticated, you'll see:
+    - ✅ **Connected** with your GitHub username
+    - Your avatar and profile
+  </Step>
+</Steps>
+
+<Warning>
+GitHub Issues integration requires `gh` CLI. It does **not** work with GitHub OAuth tokens stored in Emdash alone.
+</Warning>
+
+### Using GitHub Issues
+
+<Tabs>
+  <Tab title="Browse issues">
+    Issues are **project-specific**. When you attach an issue to a task:
+    1. Emdash runs `gh issue list` in the project directory
+    2. Fetches open issues (state: `open`)
+    3. Shows up to 50 most recently updated issues
+
+    From `GitHubService.ts:491-521`:
+    ```typescript
+    async listIssues(projectPath: string, limit: number = 50): Promise<any[]> {
+      const fields = ['number', 'title', 'url', 'state', 'updatedAt', 'assignees', 'labels'];
+      const { stdout } = await this.execGH(
+        `gh issue list --state open --limit ${safeLimit} --json ${fields.join(',')}`,
+        { cwd: projectPath }
+      );
+      const list = JSON.parse(stdout || '[]');
+      if (!Array.isArray(list)) return [];
+      return list;
+    }
+    ```
+  </Tab>
+
+  <Tab title="Search issues">
+    Search within the current project:
+    ```typescript
+    async searchIssues(
+      projectPath: string,
+      searchTerm: string,
+      limit: number = 20
+    ): Promise<any[]> {
+      const { stdout } = await this.execGH(
+        `gh issue list --state open --search ${JSON.stringify(term)} --limit ${safeLimit} --json ${fields.join(',')}`,
+        { cwd: projectPath }
+      );
+      return JSON.parse(stdout || '[]');
+    }
+    ```
+  </Tab>
+
+  <Tab title="Attach to task">
+    The agent receives:
+    ```markdown
+    # Issue #42: Add dark mode toggle
+
+    **Status**: open
+    **Assignees**: @alice, @bob
+    **Labels**: enhancement, ui
+
+    ## Description
+    We should add a dark mode toggle in the settings panel...
+
+    [View on GitHub](https://github.com/org/repo/issues/42)
+    ```
+  </Tab>
+</Tabs>
+
+<Info>
+GitHub Issues requires the project to be a GitHub repository. For non-GitHub projects, use Linear or Jira instead.
+</Info>
+
+## Credential storage summary
+
+| Platform | Storage | Service Name | Location |
+|----------|---------|--------------|----------|
+| Linear | Keytar | `emdash-linear` | `api-token` account |
+| Jira (token) | Keytar | `emdash-jira` | `api-token` account |
+| Jira (config) | JSON file | — | `<userData>/jira.json` |
+| GitHub | Keytar + `gh` CLI | `emdash-github` | `github-token` account |
+
+**Keychain locations**:
+- **macOS**: Keychain Access.app
+- **Linux**: libsecret (GNOME Keyring, KWallet)
+- **Windows**: Windows Credential Manager
+
+## Disconnecting integrations
+
+To disconnect an integration:
+
+1. Go to **Settings → Integrations**
+2. Select the platform (Linear/Jira/GitHub)
+3. Click **Disconnect**
+
+Emdash will:
+- Remove credentials from the OS keychain
+- Clear any cached data
+- Stop fetching issues from that platform
+
+<Warning>
+Disconnecting an integration does **not** remove issues already attached to tasks. The issue metadata remains in the Emdash database.
+</Warning>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Linear: Invalid API key">
+    **Symptom**: "Unable to retrieve Linear account information"
+
+    **Solutions**:
+    1. Verify the API key is correct (regenerate if needed)
+    2. Check the key has the required scopes (read:issues, write:issues)
+    3. Ensure your Linear workspace is active
+  </Accordion>
+
+  <Accordion title="Jira: 401 Unauthorized">
+    **Symptom**: "Jira API error 401"
+
+    **Solutions**:
+    1. Verify your Atlassian email is correct
+    2. Regenerate your API token
+    3. Ensure your Jira site URL is correct (`https://` required)
+    4. Check you have access to the Jira project
+  </Accordion>
+
+  <Accordion title="GitHub: gh not found">
+    **Symptom**: "GitHub CLI not installed"
+
+    **Solutions**:
+    1. Install `gh` CLI: `brew install gh` (macOS)
+    2. Authenticate: `gh auth login`
+    3. Restart Emdash to detect the CLI
+    4. Check PATH includes `gh` location
+  </Accordion>
+
+  <Accordion title="No issues appear">
+    **Symptom**: Issue list is empty despite having open issues
+
+    **Solutions**:
+    - **Linear**: Check filter excludes completed/cancelled issues
+    - **Jira**: Verify you have permission to view issues (try JQL in Jira web)
+    - **GitHub**: Ensure the project is a GitHub repo with issues enabled
+  </Accordion>
+</AccordionGroup>
+
+## Best practices
+
+<CardGroup cols={2}>
+  <Card title="Use dedicated API keys" icon="key">
+    Create separate API keys for Emdash (not your personal keys) for easier revocation.
+  </Card>
+
+  <Card title="Link PRs to issues" icon="link">
+    When creating PRs, Emdash can automatically reference the linked issue in the description.
+  </Card>
+
+  <Card title="Keep issue context minimal" icon="minimize">
+    Large issue descriptions can overwhelm agents. Summarize key requirements in the task description.
+  </Card>
+
+  <Card title="Rotate credentials regularly" icon="rotate">
+    Regenerate API keys periodically for security.
+  </Card>
+</CardGroup>
+
+## Related resources
+
+- [LinearService source](https://github.com/generalaction/emdash/blob/main/src/main/services/LinearService.ts)
+- [JiraService source](https://github.com/generalaction/emdash/blob/main/src/main/services/JiraService.ts)
+- [GitHubService source](https://github.com/generalaction/emdash/blob/main/src/main/services/GitHubService.ts)

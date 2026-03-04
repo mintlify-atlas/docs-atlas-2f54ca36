@@ -1,122 +1,113 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Emdash",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#8c9498",
+    "light": "#2f3a42",
+    "dark": "#dbdce0"
   },
-  "favicon": "/favicon.svg",
+  "logo": {
+    "light": "https://media.brand.dev/357cbdd2-440c-4b94-94c3-98082da5561e.svg",
+    "dark": "https://media.brand.dev/357cbdd2-440c-4b94-94c3-98082da5561e.svg"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/generalaction/emdash"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/generalaction/emdash",
+      "twitter": "https://twitter.com/emdashsh",
+      "discord": "https://discord.gg/f2fv7YxuR2"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "installation",
+              "quickstart"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/worktrees",
+              "concepts/agents",
+              "concepts/tasks",
+              "concepts/parallel-execution"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Features",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "features/providers",
+              "features/ssh-remote",
+              "features/skills",
+              "features/integrations",
+              "features/github-workflow",
+              "features/diff-review"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Configuration",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "configuration/settings",
+              "configuration/project-config",
+              "configuration/environment-variables"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/adding-providers",
+              "guides/ssh-setup",
+              "guides/linear-jira",
+              "guides/troubleshooting"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Architecture",
             "pages": [
-              "api-reference/introduction"
+              "api/architecture-overview",
+              "api/main-process",
+              "api/renderer-process",
+              "api/ipc-handlers"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Services",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/services/worktree-service",
+              "api/services/pty-manager",
+              "api/services/database-service",
+              "api/services/skills-service",
+              "api/services/github-service"
+            ]
+          },
+          {
+            "group": "Development",
+            "pages": [
+              "api/development-setup",
+              "api/testing",
+              "api/contributing"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

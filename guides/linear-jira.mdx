@@ -1,0 +1,528 @@
+---
+title: Linear and Jira integration
+description: Connect Emdash to Linear and Jira to link tasks with issues and track work
+---
+
+Emdash integrates with Linear and Jira to help you link development tasks to issues, automatically populate context, and maintain traceability from issue to pull request.
+
+## Integration overview
+
+When you link a task to a Linear or Jira issue, Emdash:
+
+1. **Fetches issue details**: Title, description, status, assignee, labels
+2. **Seeds the agent context**: Injects issue details as the first message
+3. **Tracks the link**: Stores the association in the database
+4. **Generates branch names**: Uses issue key/identifier in branch name
+5. **Adds PR footer**: Links the PR back to the original issue
+
+<Note>
+You can link a task to Linear, Jira, or GitHub issues — but only one issue per task.
+</Note>
+
+## Linear setup
+
+<Steps>
+
+<Step title="Generate a Linear API key">
+
+1. Open Linear
+2. Go to **Settings → Security & access → Personal API keys**
+3. Click **Create key**
+4. Give it a name (e.g., "Emdash")
+5. Copy the generated API key
+
+<Warning>
+Linear API keys grant full access to your workspace. Keep them secure.
+</Warning>
+
+</Step>
+
+<Step title="Add the API key to Emdash">
+
+1. In Emdash, create a new task (or go to Settings)
+2. Click **Advanced settings**
+3. Under **Issue tracking**, click **Linear**
+4. Click **Setup**
+5. Paste your API key
+6. Click **Connect**
+
+Emdash will verify the connection and display a success message.
+
+</Step>
+
+<Step title="Link an issue to a task">
+
+1. Create a new task
+2. Click **Advanced settings**
+3. Under **Linear**, click the issue selector
+4. Search for an issue by ID, title, or description
+5. Select the issue
+6. Click **Create task**
+
+The issue details will be injected as the first message in the conversation.
+
+</Step>
+
+</Steps>
+
+### Linear API implementation
+
+Emdash uses the Linear GraphQL API to fetch and search issues.
+
+```typescript src/main/ipc/linearIpc.ts
+export function registerLinearIpc() {
+  ipcMain.handle('linear:saveToken', async (_event, token: string) => {
+    return linearService.saveToken(token);
+  });
+
+  ipcMain.handle('linear:checkConnection', async () => {
+    return linearService.checkConnection();
+  });
+
+  ipcMain.handle('linear:searchIssues', async (_event, searchTerm: string, limit?: number) => {
+    const issues = await linearService.searchIssues(searchTerm, limit ?? 20);
+    return { success: true, issues };
+  });
+}
+```
+
+### Linear issue context injection
+
+When a task is linked to a Linear issue:
+
+```typescript src/renderer/lib/taskCreationService.ts
+const lines = [`Linked Linear issue: ${issue.identifier} — ${issue.title}`];
+
+if (issue.description) {
+  lines.push('', '## Description', issue.description);
+}
+
+if (issue.state?.name) {
+  lines.push('', `**Status**: ${issue.state.name}`);
+}
+
+if (issue.assignee?.name) {
+  lines.push(`**Assignee**: ${issue.assignee.name}`);
+}
+
+if (issue.labels && issue.labels.length > 0) {
+  lines.push(`**Labels**: ${issue.labels.join(', ')}`);
+}
+
+const content = lines.join('\n');
+```
+
+This context is injected as the first message, giving the agent full visibility into the issue.
+
+## Jira setup
+
+<Steps>
+
+<Step title="Create a Jira API token">
+
+1. Go to [https://id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
+2. Click **Create API token**
+3. Give it a label (e.g., "Emdash")
+4. Click **Create**
+5. Copy the token (it won't be shown again)
+
+</Step>
+
+<Step title="Find your Jira site URL">
+
+Your Jira site URL is typically:
+
+```
+https://your-company.atlassian.net
+```
+
+You can find it in the browser URL bar when using Jira.
+
+</Step>
+
+<Step title="Add Jira credentials to Emdash">
+
+1. In Emdash, create a new task
+2. Click **Advanced settings**
+3. Under **Issue tracking**, click **Jira**
+4. Click **Setup**
+5. Enter:
+   - **Site URL**: Your Jira base URL (e.g., `https://company.atlassian.net`)
+   - **Email**: Your Atlassian account email
+   - **API Token**: The token you created
+6. Click **Connect**
+
+Emdash will verify the connection.
+
+</Step>
+
+<Step title="Link a Jira issue to a task">
+
+1. Create a new task
+2. Click **Advanced settings**
+3. Under **Jira**, click the issue selector
+4. Search by issue key (e.g., `PROJ-123`) or summary text
+5. Select the issue
+6. Click **Create task**
+
+The issue details will be injected into the agent context.
+
+</Step>
+
+</Steps>
+
+### Jira API implementation
+
+Emdash uses the Jira REST API v3 to fetch and search issues.
+
+```typescript src/main/ipc/jiraIpc.ts
+export function registerJiraIpc() {
+  ipcMain.handle(
+    'jira:saveCredentials',
+    async (_e, args: { siteUrl: string; email: string; token: string }) => {
+      const siteUrl = String(args?.siteUrl || '').trim();
+      const email = String(args?.email || '').trim();
+      const token = String(args?.token || '').trim();
+      if (!siteUrl || !email || !token) {
+        return { success: false, error: 'Site URL, email, and API token are required.' };
+      }
+      return jira.saveCredentials(siteUrl, email, token);
+    }
+  );
+
+  ipcMain.handle('jira:searchIssues', async (_e, searchTerm: string, limit?: number) => {
+    const issues = await jira.smartSearchIssues(searchTerm, limit ?? 20);
+    return { success: true, issues };
+  });
+}
+```
+
+### Jira issue context injection
+
+Similar to Linear, Jira issue details are injected as context:
+
+```typescript src/renderer/lib/taskCreationService.ts
+const line = `Linked Jira issue: ${issue.key || ''}${issue.summary ? ` — ${issue.summary}` : ''}`;
+
+if (issue.description) {
+  lines.push('', '## Description', issue.description);
+}
+
+if (issue.status?.name) {
+  lines.push('', `**Status**: ${issue.status.name}`);
+}
+
+if (issue.assignee?.displayName) {
+  lines.push(`**Assignee**: ${issue.assignee.displayName}`);
+}
+```
+
+## Task creation workflow with issues
+
+Here's the complete flow when creating a task with a linked issue:
+
+<Steps>
+
+<Step title="User selects an issue">
+
+In the task creation modal:
+
+1. User clicks **Advanced settings**
+2. Selects **Linear**, **Jira**, or **GitHub**
+3. Searches for an issue
+4. Selects one from the results
+
+</Step>
+
+<Step title="Emdash fetches issue details">
+
+The integration service fetches:
+
+- Title/summary
+- Description
+- Status/state
+- Assignee
+- Labels/tags
+- URL
+
+</Step>
+
+<Step title="Task name is auto-generated">
+
+If the user hasn't entered a custom task name, Emdash generates one from the issue:
+
+```typescript src/renderer/lib/branchNameGenerator.ts
+export function generateTaskNameFromContext(options: {
+  linearIssue?: LinearIssueSummary | null;
+  jiraIssue?: JiraIssueSummary | null;
+  githubIssue?: GitHubIssueSummary | null;
+}): string | null {
+  const { linearIssue, jiraIssue, githubIssue } = options;
+
+  if (linearIssue?.title) {
+    return `${linearIssue.identifier}: ${linearIssue.title}`;
+  }
+
+  if (jiraIssue?.summary) {
+    return `${jiraIssue.key}: ${jiraIssue.summary}`;
+  }
+
+  if (githubIssue?.title) {
+    return `#${githubIssue.number}: ${githubIssue.title}`;
+  }
+
+  return null;
+}
+```
+
+</Step>
+
+<Step title="Branch name includes issue key">
+
+The worktree branch is created with the issue identifier:
+
+```
+emdash/lin-123-fix-authentication-bug-a3f
+emdash/proj-456-add-export-feature-b7c
+```
+
+</Step>
+
+<Step title="Issue context is seeded">
+
+Before the user's initial prompt, the issue details are sent as a system message:
+
+```markdown
+Linked Linear issue: LIN-123 — Fix authentication bug
+
+## Description
+Users are unable to log in after the recent update to the auth service.
+
+**Status**: In Progress
+**Assignee**: Alice Smith
+**Labels**: bug, auth, priority-high
+```
+
+This gives the agent full context before it starts working.
+
+</Step>
+
+<Step title="User prompt follows">
+
+After the issue context, the user's initial prompt is delivered:
+
+```
+Fix the login issue by checking the session token validation logic
+```
+
+The agent now has both the issue context and the user's instructions.
+
+</Step>
+
+</Steps>
+
+## Pull request linking
+
+When you generate a PR from a task with a linked issue, Emdash automatically adds the issue to the PR description footer.
+
+### PR footer format
+
+```markdown
+---
+Linked issues:
+- Linear: https://linear.app/company/issue/LIN-123
+```
+
+For Jira:
+
+```markdown
+---
+Linked issues:
+- Jira: https://company.atlassian.net/browse/PROJ-456
+```
+
+This creates a traceable link from issue → task → PR → merge.
+
+## Issue badges in the UI
+
+Linked issues are displayed as badges in the task list:
+
+```typescript src/renderer/components/TaskContextBadges.tsx
+{linearIssue && (
+  <button
+    onClick={() => window.open(linearIssue.url, '_blank')}
+    className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs"
+    aria-label={`Linear issue ${linearIssue.identifier}: ${linearIssue.title}`}
+  >
+    <img src={linearLogo} alt="Linear" className="h-3.5 w-3.5" />
+    <span>{linearIssue.identifier}</span>
+  </button>
+)}
+```
+
+Clicking the badge opens the issue in your browser.
+
+## Credential storage
+
+### Linear
+
+Linear API tokens are stored in the Emdash database (encrypted at rest by the OS).
+
+Location:
+
+- macOS: `~/Library/Application Support/emdash/emdash.db`
+- Linux: `~/.config/emdash/emdash.db`
+- Windows: `%APPDATA%\emdash\emdash.db`
+
+### Jira
+
+Jira credentials (site URL, email, token) are also stored in the database.
+
+<Warning>
+The database file contains sensitive credentials. Ensure it has proper file permissions and is excluded from backups or sync tools if needed.
+</Warning>
+
+## Troubleshooting
+
+<Accordion title="Linear connection fails">
+
+**Symptoms**: "Invalid API key" or connection timeout
+
+**Solutions**:
+
+1. Verify the API key is correct (re-copy from Linear)
+2. Check you have internet access
+3. Ensure the API key hasn't been revoked
+4. Try generating a new API key in Linear
+
+</Accordion>
+
+<Accordion title="Jira connection fails">
+
+**Symptoms**: "Unauthorized" or "Invalid credentials"
+
+**Solutions**:
+
+1. Verify site URL is correct (e.g., `https://company.atlassian.net`)
+2. Use your Atlassian account email (not username)
+3. Ensure the API token is valid (regenerate if needed)
+4. Check you have access to the Jira site
+5. Verify your account isn't locked or suspended
+
+</Accordion>
+
+<Accordion title="Issue search returns no results">
+
+**Symptoms**: Search doesn't find known issues
+
+**Solutions**:
+
+- **Linear**: Search by issue ID (e.g., `LIN-123`), title keywords, or description
+- **Jira**: Try searching by exact issue key first (e.g., `PROJ-456`)
+- Check the issue is in a project you have access to
+- Verify the issue isn't archived or deleted
+
+</Accordion>
+
+<Accordion title="Issue context not injected">
+
+**Symptoms**: Agent doesn't see issue details
+
+**Solutions**:
+
+1. Check the first message in the conversation — it should contain issue details
+2. If missing, the issue metadata may not have saved
+3. Try creating a new task with the issue linked
+4. Check the database for the task's `metadata` field
+
+</Accordion>
+
+<Accordion title="Wrong issue linked to task">
+
+**Symptoms**: Task shows the wrong issue badge
+
+**Solutions**:
+
+1. Edit the task metadata to remove the issue link
+2. Recreate the task with the correct issue
+3. Currently, there's no UI to change the linked issue after creation
+
+</Accordion>
+
+<Accordion title="PR footer missing issue link">
+
+**Symptoms**: Generated PR doesn't include issue URL
+
+**Solutions**:
+
+1. Verify the task has a linked issue (check for badge in task list)
+2. Re-generate the PR
+3. Check the PR description was generated by Emdash (not manually created)
+
+</Accordion>
+
+## Data types and schema
+
+### Linear issue summary
+
+```typescript src/renderer/types/linear.ts
+export interface LinearIssueSummary {
+  identifier: string;    // e.g., "LIN-123"
+  title: string;
+  description?: string | null;
+  url?: string | null;
+  state?: LinearStateRef | null;
+  team?: LinearTeamRef | null;
+  project?: LinearProjectRef | null;
+  assignee?: LinearUserRef | null;
+}
+```
+
+### Jira issue summary
+
+```typescript src/renderer/types/jira.ts
+export interface JiraIssueSummary {
+  key: string;           // e.g., "PROJ-456"
+  summary: string;
+  description?: string | null;
+  url?: string | null;
+  status?: JiraStatusRef | null;
+  project?: JiraProjectRef | null;
+  assignee?: JiraUserRef | null;
+}
+```
+
+### Database storage
+
+Linked issues are stored in the `tasks` table's `metadata` field:
+
+```typescript
+metadata: JSON.stringify({
+  isLinearContext: true,
+  linearIssue: {
+    identifier: 'LIN-123',
+    title: 'Fix auth bug',
+    url: 'https://linear.app/company/issue/LIN-123',
+    // ...
+  }
+})
+```
+
+And in the `conversations` table for the main conversation.
+
+## Advanced: Custom issue workflows
+
+You can extend the issue integration by:
+
+1. **Adding new providers**: Implement a service for GitHub Issues, Asana, ClickUp, etc.
+2. **Custom context formatting**: Modify how issue details are injected
+3. **Automatic status updates**: Use webhooks to update issue status when PRs merge
+4. **Bidirectional sync**: Update Emdash tasks when issues change
+
+See `src/main/services/LinearService.ts` and `JiraService.ts` for implementation examples.
+
+## Next steps
+
+- [Adding providers](/guides/adding-providers) — Add CLI agents to work on linked issues
+- [SSH connection setup](/guides/ssh-setup) — Work on issues from remote servers
+- [Troubleshooting](/guides/troubleshooting) — Debug common integration issues

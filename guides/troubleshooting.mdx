@@ -1,0 +1,857 @@
+---
+title: Troubleshooting
+description: Common issues and solutions for Emdash development and usage
+---
+
+This guide covers frequent issues encountered when developing or using Emdash, along with practical solutions.
+
+## Native module issues
+
+Emdash uses three native Node.js modules that must be compiled for Electron: `sqlite3`, `node-pty`, and `keytar`.
+
+<Accordion title="Native module crashes on startup">
+
+**Symptoms**: App crashes immediately with errors mentioning `sqlite3`, `node-pty`, or `keytar`
+
+**Common error messages**:
+
+```
+Error: The module was compiled against a different Node.js version
+Error: Cannot find module 'sqlite3'
+Error: dyld: lazy symbol binding failed
+```
+
+**Solutions**:
+
+<Steps>
+
+<Step title="Rebuild native modules">
+
+Run the rebuild command:
+
+```bash
+pnpm run rebuild
+```
+
+This recompiles native modules for your current Electron version.
+
+</Step>
+
+<Step title="Clean install if rebuild fails">
+
+If rebuild doesn't fix it, do a full clean install:
+
+```bash
+pnpm run reset
+```
+
+This removes `node_modules` and reinstalls everything from scratch.
+
+</Step>
+
+<Step title="Verify Node version">
+
+Emdash requires Node.js 22.x. Check your version:
+
+```bash
+node --version
+```
+
+If incorrect, install the right version:
+
+```bash
+nvm install 22.20.0
+nvm use 22.20.0
+```
+
+Or use the `.nvmrc` file:
+
+```bash
+nvm use
+```
+
+</Step>
+
+<Step title="Check platform-specific dependencies">
+
+**Linux**: Install build tools and required libraries
+
+```bash
+# Ubuntu/Debian
+sudo apt install build-essential python3 libsecret-1-dev
+
+# Fedora
+sudo dnf install @development-tools python3 libsecret-devel
+
+# Arch
+sudo pacman -S base-devel python libsecret
+```
+
+**macOS**: Install Xcode Command Line Tools
+
+```bash
+xcode-select --install
+```
+
+**Windows**: Install Visual Studio Build Tools
+
+```powershell
+npm install --global windows-build-tools
+```
+
+</Step>
+
+</Steps>
+
+</Accordion>
+
+<Accordion title="sqlite3 binding errors">
+
+**Symptoms**: Database operations fail, errors like "Cannot find module 'node_sqlite3.node'"
+
+**Solutions**:
+
+1. Rebuild sqlite3 specifically:
+   ```bash
+   pnpm rebuild sqlite3
+   ```
+
+2. If that fails, use the fallback database driver:
+   ```bash
+   export EMDASH_DISABLE_NATIVE_DB=1
+   pnpm run dev
+   ```
+
+3. Check the database file isn't corrupted (see [Database corruption](#database-corruption))
+
+</Accordion>
+
+<Accordion title="node-pty errors on Windows">
+
+**Symptoms**: Terminal doesn't work, PTY spawn fails
+
+**Common error**:
+
+```
+Error: Cannot find module 'node-pty'
+```
+
+**Solutions**:
+
+1. Ensure you have Windows Build Tools:
+   ```powershell
+   npm install --global windows-build-tools
+   ```
+
+2. Rebuild node-pty:
+   ```bash
+   pnpm rebuild node-pty
+   ```
+
+3. If using WSL, build inside WSL (not Windows)
+
+</Accordion>
+
+<Accordion title="keytar errors (Linux)">
+
+**Symptoms**: Credential storage fails, SSH passwords not saved
+
+**Common error**:
+
+```
+Error: The module 'keytar' was compiled against a different Node.js version
+```
+
+**Solutions**:
+
+1. Install libsecret:
+   ```bash
+   # Ubuntu/Debian
+   sudo apt install libsecret-1-dev gnome-keyring
+
+   # Fedora
+   sudo dnf install libsecret-devel gnome-keyring
+
+   # Arch
+   sudo pacman -S libsecret gnome-keyring
+   ```
+
+2. Rebuild keytar:
+   ```bash
+   pnpm rebuild keytar
+   ```
+
+3. Start gnome-keyring if not running:
+   ```bash
+   gnome-keyring-daemon --start --components=secrets
+   ```
+
+</Accordion>
+
+## Agent and PATH issues
+
+<Accordion title="Agent not found / command not in PATH">
+
+**Symptoms**: Task creation fails with "Agent not found" or "command not found: claude"
+
+**Why this happens**:
+
+When Emdash is launched from the GUI (Finder, Dock, application launcher), it may not inherit your shell's `PATH` configuration.
+
+**Solutions**:
+
+<Steps>
+
+<Step title="Verify agent is installed">
+
+Test in a terminal:
+
+```bash
+which claude  # or codex, amp, etc.
+```
+
+If this returns nothing, install the agent first.
+
+</Step>
+
+<Step title="Launch Emdash from terminal">
+
+Launching from a terminal inherits your shell's PATH:
+
+```bash
+pnpm run dev
+```
+
+If this works, the issue is PATH configuration.
+
+</Step>
+
+<Step title="Add agent to system PATH">
+
+**macOS/Linux**: Add to shell profile (`~/.zshrc`, `~/.bashrc`, etc.)
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"  # or wherever the agent is installed
+```
+
+Reload:
+
+```bash
+source ~/.zshrc
+```
+
+**Windows**: Add to System Environment Variables via Settings
+
+</Step>
+
+<Step title="Check Emdash PATH setup">
+
+Emdash tries to fix PATH on startup in `src/main/main.ts`. If your agent still isn't found, you may need to add the installation directory to this logic.
+
+Common locations Emdash checks:
+
+- `/usr/local/bin`
+- `/opt/homebrew/bin`
+- `~/.local/bin`
+- `~/bin`
+- `~/.nvm/versions/node/*/bin`
+- `~/.npm-global/bin`
+
+</Step>
+
+</Steps>
+
+</Accordion>
+
+<Accordion title="Agent installed but not detected">
+
+**Symptoms**: Agent is in PATH but doesn't appear in provider dropdown
+
+**Solutions**:
+
+1. Check the provider definition in `src/shared/providers/registry.ts`:
+   - Verify `commands` array matches the actual binary name
+   - Ensure `detectable` is not set to `false`
+   - Check `versionArgs` succeeds (e.g., `claude --version`)
+
+2. Restart Emdash — detection runs on startup
+
+3. Check the console for detection errors (Cmd+Option+I / Ctrl+Shift+I)
+
+</Accordion>
+
+<Accordion title="API keys not available to agent">
+
+**Symptoms**: Agent starts but can't access API keys (e.g., `ANTHROPIC_API_KEY` not found)
+
+**Why this happens**:
+
+PTYs use a minimal environment that doesn't inherit `process.env`. Only keys in `AGENT_ENV_VARS` are passed through.
+
+**Solutions**:
+
+1. Add the key to `AGENT_ENV_VARS` in `src/main/services/ptyManager.ts`:
+   ```typescript
+   const AGENT_ENV_VARS = [
+     'ANTHROPIC_API_KEY',
+     'OPENAI_API_KEY',
+     // Add your key here
+     'MY_AGENT_API_KEY',
+   ];
+   ```
+
+2. Set the key in your shell environment:
+   ```bash
+   export MY_AGENT_API_KEY="your-key-here"
+   ```
+
+3. Restart Emdash to pick up the new environment
+
+</Accordion>
+
+## Git and worktree issues
+
+<Accordion title="Worktree creation fails">
+
+**Symptoms**: Task creation fails with "Failed to create worktree" or "worktree already exists"
+
+**Common errors**:
+
+```
+fatal: 'worktrees/task-name-abc' already exists
+fatal: invalid reference: emdash/task-name-abc
+```
+
+**Solutions**:
+
+<Steps>
+
+<Step title="Clean up orphaned worktrees">
+
+```bash
+cd /path/to/your/repo
+git worktree prune
+```
+
+</Step>
+
+<Step title="Manually remove stuck worktree">
+
+```bash
+rm -rf ../worktrees/task-name-abc
+git worktree prune
+git branch -D emdash/task-name-abc
+```
+
+</Step>
+
+<Step title="Check .git/worktrees for corruption">
+
+```bash
+ls -la .git/worktrees/
+```
+
+If you see broken symlinks or empty directories, remove them:
+
+```bash
+rm -rf .git/worktrees/task-name-abc
+```
+
+</Step>
+
+</Steps>
+
+</Accordion>
+
+<Accordion title="Cannot switch to worktree branch">
+
+**Symptoms**: "reference is not a tree" or "branch already exists"
+
+**Solutions**:
+
+1. Delete the conflicting branch:
+   ```bash
+   git branch -D emdash/task-name-abc
+   ```
+
+2. Let Emdash recreate it automatically
+
+3. If the branch exists in remote, fetch and track it:
+   ```bash
+   git fetch origin emdash/task-name-abc
+   git checkout emdash/task-name-abc
+   ```
+
+</Accordion>
+
+<Accordion title="Preserved files not copying to worktree">
+
+**Symptoms**: `.env`, `.envrc`, or other gitignored files missing in worktree
+
+**Solutions**:
+
+1. Check `.emdash.json` in project root:
+   ```json
+   {
+     "preservePatterns": [
+       ".env",
+       ".envrc",
+       ".claude/**"
+     ]
+   }
+   ```
+
+2. Ensure the files exist in the main repo (not just in another worktree)
+
+3. Re-create the task to trigger a fresh worktree with preserved files
+
+</Accordion>
+
+## Database issues
+
+<Accordion title="Database corruption">
+
+**Symptoms**: App crashes on startup, errors like "database disk image is malformed"
+
+**Solutions**:
+
+<Steps>
+
+<Step title="Locate the database file">
+
+- **macOS**: `~/Library/Application Support/emdash/emdash.db`
+- **Linux**: `~/.config/emdash/emdash.db`
+- **Windows**: `%APPDATA%\emdash\emdash.db`
+
+</Step>
+
+<Step title="Backup the corrupt database">
+
+```bash
+cp ~/Library/Application\ Support/emdash/emdash.db ~/emdash-backup.db
+```
+
+</Step>
+
+<Step title="Attempt recovery with sqlite3">
+
+```bash
+sqlite3 ~/Library/Application\ Support/emdash/emdash.db ".recover" | sqlite3 emdash-recovered.db
+```
+
+If successful, replace the original:
+
+```bash
+mv emdash-recovered.db ~/Library/Application\ Support/emdash/emdash.db
+```
+
+</Step>
+
+<Step title="Last resort: delete and recreate">
+
+<Warning>
+This deletes all tasks, conversations, and settings.
+</Warning>
+
+```bash
+rm ~/Library/Application\ Support/emdash/emdash.db
+```
+
+Emdash will create a fresh database on next launch.
+
+</Step>
+
+</Steps>
+
+</Accordion>
+
+<Accordion title="Migration errors">
+
+**Symptoms**: "Migration failed" or "column not found" after update
+
+**Solutions**:
+
+1. Check the current schema version:
+   ```bash
+   sqlite3 ~/Library/Application\ Support/emdash/emdash.db "SELECT * FROM __drizzle_migrations;"
+   ```
+
+2. If migrations are stuck, manually run them:
+   ```bash
+   pnpm exec drizzle-kit migrate
+   ```
+
+3. If migrations fail, restore from backup or delete the database
+
+</Accordion>
+
+<Accordion title="Database locked errors">
+
+**Symptoms**: "database is locked" or "unable to open database file"
+
+**Solutions**:
+
+1. Ensure only one instance of Emdash is running
+
+2. Check for zombie processes:
+   ```bash
+   ps aux | grep emdash
+   kill -9 <pid>
+   ```
+
+3. Remove stale lock files:
+   ```bash
+   rm ~/Library/Application\ Support/emdash/emdash.db-wal
+   rm ~/Library/Application\ Support/emdash/emdash.db-shm
+   ```
+
+</Accordion>
+
+## PTY and terminal issues
+
+<Accordion title="PTY exits immediately after spawn">
+
+**Symptoms**: Terminal opens and closes instantly, no output
+
+**Solutions**:
+
+1. Check agent CLI is correct in provider definition
+
+2. Test the command manually:
+   ```bash
+   claude --version  # or your agent
+   ```
+
+3. Check for missing dependencies (Python, Node.js, etc.)
+
+4. Look for errors in Electron console (Cmd+Option+I / Ctrl+Shift+I)
+
+</Accordion>
+
+<Accordion title="Terminal output garbled or missing">
+
+**Symptoms**: Terminal shows escape codes or no output
+
+**Solutions**:
+
+1. Try resizing the terminal pane
+
+2. Restart the PTY (close and reopen the task)
+
+3. Check PTY dimensions are correct:
+   ```typescript
+   const MIN_PTY_COLS = 2;
+   const MIN_PTY_ROWS = 1;
+   ```
+
+4. Disable terminal features like ligatures or complex rendering
+
+</Accordion>
+
+<Accordion title="PTY not cleaning up on exit">
+
+**Symptoms**: Zombie processes or orphaned tmux sessions
+
+**Solutions**:
+
+1. Manually kill tmux sessions:
+   ```bash
+   tmux kill-session -t emdash-claude-main-<task-id>
+   ```
+
+2. Kill orphaned PTYs:
+   ```bash
+   ps aux | grep node-pty
+   kill -9 <pid>
+   ```
+
+3. Check `ptyManager.ts` calls `removePty()` on exit
+
+</Accordion>
+
+## Development and build issues
+
+<Accordion title="TypeScript errors after pulling changes">
+
+**Symptoms**: `pnpm run type-check` fails with type errors
+
+**Solutions**:
+
+1. Reinstall dependencies:
+   ```bash
+   pnpm install
+   ```
+
+2. Clear TypeScript cache:
+   ```bash
+   rm -rf dist/
+   pnpm run build
+   ```
+
+3. Check you're on the correct Node version:
+   ```bash
+   nvm use
+   ```
+
+4. Verify path aliases are correct in `tsconfig.json` and `tsconfig.main.json`
+
+</Accordion>
+
+<Accordion title="Hot reload not working">
+
+**Symptoms**: Changes don't appear after saving files
+
+**Solutions**:
+
+- **Renderer process**: Should hot-reload via Vite automatically
+- **Main process**: Requires full restart (Ctrl+C then `pnpm run dev`)
+- **Native modules**: Require `pnpm run rebuild`
+
+</Accordion>
+
+<Accordion title="Build fails on CI">
+
+**Symptoms**: CI fails with "Module not found" or compilation errors
+
+**Solutions**:
+
+1. Ensure CI uses correct Node version (22.x)
+
+2. Check native module binaries aren't committed:
+   ```bash
+   git status
+   git clean -fdx node_modules/
+   ```
+
+3. Verify all required environment variables are set in CI
+
+4. Check platform-specific dependencies are installed (see native module section)
+
+</Accordion>
+
+<Accordion title="Tests failing locally">
+
+**Symptoms**: `pnpm exec vitest run` fails
+
+**Solutions**:
+
+1. Ensure test environment is correct in `vite.config.ts`:
+   ```typescript
+   test: {
+     environment: 'node',
+   }
+   ```
+
+2. Check mocks are correctly set up (tests use `vi.mock()`)
+
+3. Verify temp directories are writable:
+   ```bash
+   ls -la /tmp  # or os.tmpdir() output
+   ```
+
+4. Run a specific test to isolate the issue:
+   ```bash
+   pnpm exec vitest run src/test/main/WorktreeService.test.ts
+   ```
+
+</Accordion>
+
+## Platform-specific issues
+
+<Accordion title="macOS: App not signed / can't be opened">
+
+**Symptoms**: "App is damaged and can't be opened" or Gatekeeper blocking
+
+**Solutions**:
+
+1. Remove quarantine attribute:
+   ```bash
+   xattr -cr /Applications/Emdash.app
+   ```
+
+2. Allow app in System Preferences → Security & Privacy
+
+3. For development builds, disable Gatekeeper temporarily:
+   ```bash
+   sudo spctl --master-disable
+   ```
+
+   Re-enable after:
+   ```bash
+   sudo spctl --master-enable
+   ```
+
+</Accordion>
+
+<Accordion title="Linux: Wayland compatibility issues">
+
+**Symptoms**: App doesn't launch or crashes on Wayland
+
+**Solutions**:
+
+1. Force X11 mode:
+   ```bash
+   export ELECTRON_OZONE_PLATFORM_HINT=x11
+   pnpm run dev
+   ```
+
+2. Or use Wayland explicitly:
+   ```bash
+   export ELECTRON_OZONE_PLATFORM_HINT=wayland
+   pnpm run dev
+   ```
+
+3. Ensure required env vars are set:
+   ```bash
+   echo $WAYLAND_DISPLAY
+   echo $XDG_RUNTIME_DIR
+   ```
+
+</Accordion>
+
+<Accordion title="Windows: PowerShell execution policy blocks scripts">
+
+**Symptoms**: `pnpm` commands fail with "execution policy" error
+
+**Solutions**:
+
+1. Allow scripts for current user:
+   ```powershell
+   Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+   ```
+
+2. Or run in Administrator mode:
+   ```powershell
+   Set-ExecutionPolicy RemoteSigned
+   ```
+
+</Accordion>
+
+## Debugging tips
+
+<Steps>
+
+<Step title="Enable Electron DevTools">
+
+Press `Cmd+Option+I` (macOS) or `Ctrl+Shift+I` (Windows/Linux) to open DevTools.
+
+Check Console tab for errors.
+
+</Step>
+
+<Step title="Check main process logs">
+
+Main process logs go to terminal stdout when running `pnpm run dev`.
+
+Look for errors from `log.error()` calls.
+
+</Step>
+
+<Step title="Inspect database directly">
+
+```bash
+sqlite3 ~/Library/Application\ Support/emdash/emdash.db
+
+.tables
+SELECT * FROM tasks LIMIT 5;
+.exit
+```
+
+</Step>
+
+<Step title="Use Drizzle Studio for database inspection">
+
+```bash
+pnpm exec drizzle-kit studio
+```
+
+Opens a web UI at `http://localhost:3000`.
+
+</Step>
+
+<Step title="Test IPC handlers directly">
+
+In DevTools console:
+
+```javascript
+await window.electronAPI.checkGitHubConnection()
+await window.electronAPI.getTasks({ projectId: 'abc' })
+```
+
+</Step>
+
+</Steps>
+
+## Getting help
+
+If you're still stuck:
+
+1. **Check GitHub issues**: [https://github.com/emdash-ai/emdash/issues](https://github.com/emdash-ai/emdash/issues)
+2. **Search AGENTS.md**: The internal dev guide has detailed architecture notes
+3. **File a bug**: Include logs, error messages, OS/Node versions, and steps to reproduce
+
+<Note>
+When filing issues, attach relevant logs and always include:
+
+- Operating system and version
+- Node.js version (`node --version`)
+- Emdash version or commit hash
+- Full error message and stack trace
+</Note>
+
+## Preventive maintenance
+
+<Steps>
+
+<Step title="Run quality checks before committing">
+
+```bash
+pnpm run format
+pnpm run lint
+pnpm run type-check
+pnpm exec vitest run
+```
+
+</Step>
+
+<Step title="Rebuild native modules after updates">
+
+After pulling changes that update `node-pty`, `sqlite3`, or `keytar`:
+
+```bash
+pnpm run rebuild
+```
+
+</Step>
+
+<Step title="Keep database backed up">
+
+```bash
+cp ~/Library/Application\ Support/emdash/emdash.db ~/backups/emdash-$(date +%Y%m%d).db
+```
+
+</Step>
+
+<Step title="Monitor worktree disk usage">
+
+Worktrees can accumulate:
+
+```bash
+du -sh ../worktrees/*
+```
+
+Clean up old ones:
+
+```bash
+git worktree prune
+```
+
+</Step>
+
+</Steps>
+
+## Next steps
+
+- [Adding providers](/guides/adding-providers) — Extend Emdash with new agents
+- [SSH connection setup](/guides/ssh-setup) — Debug remote connection issues
+- [Linear and Jira integration](/guides/linear-jira) — Fix integration problems

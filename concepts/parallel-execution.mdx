@@ -1,0 +1,381 @@
+---
+title: "Parallel execution"
+description: "How Emdash runs multiple agents simultaneously without interference"
+---
+
+## Overview
+
+Emdash can run multiple AI agents simultaneously, each working on different tasks in complete isolation. This enables:
+
+- **Faster iteration**: Test multiple approaches in parallel
+- **Multi-agent collaboration**: Different agents working on related features
+- **Context switching**: Start a new task while another agent continues working
+- **Experimentation**: Try multiple solutions and pick the best one
+
+## Technical architecture
+
+Parallel execution is enabled by three key isolation mechanisms:
+
+### 1. Separate worktrees
+
+Each task runs in its own git worktree at a unique path:
+
+```
+worktrees/
+├── add-authentication-x7k/     # Agent 1: Claude Code
+├── fix-database-bug-m3p/       # Agent 2: Codex
+├── refactor-api-z9w/           # Agent 3: Qwen Code
+└── update-docs-k4t/            # Agent 4: OpenCode
+```
+
+Worktrees provide:
+- **File system isolation**: Each agent modifies only its own files
+- **Branch isolation**: Each task is on a separate git branch
+- **No conflicts**: Agents never interfere with each other's changes
+
+### 2. PTY isolation
+
+Each agent runs in its own pseudo-terminal (PTY) process:
+
+```typescript
+// From ptyManager.ts - PTY record structure
+type PtyRecord = {
+  id: string;              // e.g., "claude-main-task-123"
+  proc: IPty;              // Isolated PTY process
+  cwd?: string;            // Working directory (worktree path)
+  isDirectSpawn?: boolean; // Direct spawn vs shell wrapper
+  kind?: 'local' | 'ssh';  // Local or remote execution
+  cols?: number;           // Terminal dimensions
+  rows?: number;
+  tmuxSessionName?: string; // Optional tmux wrapping
+};
+```
+
+PTY isolation ensures:
+- **Process isolation**: Each agent is a separate OS process
+- **Environment isolation**: Each PTY has its own environment variables
+- **Resource isolation**: Agents don't compete for terminal state
+- **Independent lifecycle**: Agents can start/stop/crash independently
+
+### 3. Process management
+
+Emdash tracks all agent processes in a central registry:
+
+```typescript
+const ptys = new Map<string, PtyRecord>();
+```
+
+Each PTY has a unique ID based on:
+- **Provider**: Which agent (claude, codex, qwen, etc.)
+- **Type**: Main task or additional chat conversation
+- **Target**: Task ID or conversation ID
+
+From `src/shared/ptyId.ts`:
+
+```typescript
+// Main task PTY ID format
+`{providerId}-main-{taskId}`
+
+// Chat conversation PTY ID format  
+`{providerId}-chat-{conversationId}`
+```
+
+Examples:
+- `claude-main-task-abc123` — Claude working on task abc123
+- `codex-main-task-def456` — Codex working on task def456
+- `qwen-chat-conv-xyz789` — Qwen in additional conversation xyz789
+
+## How it works
+
+When you create multiple tasks and start agents:
+
+### 1. Task creation
+
+Each task gets:
+
+```typescript
+// From createWorktree()
+const worktreeInfo = {
+  id: 'wt-a1b2c3d4e5f6',
+  name: 'add-authentication',
+  branch: 'emdash/add-authentication-x7k',
+  path: '/Users/dev/myproject/../worktrees/add-authentication-x7k',
+  projectId: 'proj-123',
+  status: 'active',
+  createdAt: '2024-03-04T10:30:00Z',
+};
+```
+
+### 2. Agent spawning
+
+Each agent gets its own PTY:
+
+```typescript
+// Spawn Claude in task 1's worktree
+const claudePty = await startPty({
+  id: 'claude-main-task-1',
+  command: 'claude',
+  args: ['--dangerously-skip-permissions', 'Add user authentication'],
+  cwd: '/path/to/worktrees/add-authentication-x7k',
+  env: { ANTHROPIC_API_KEY: '...' },
+});
+
+// Spawn Codex in task 2's worktree
+const codexPty = await startPty({
+  id: 'codex-main-task-2',
+  command: 'codex',
+  args: ['--full-auto', 'Fix database connection bug'],
+  cwd: '/path/to/worktrees/fix-database-bug-m3p',
+  env: { OPENAI_API_KEY: '...' },
+});
+```
+
+### 3. Independent execution
+
+Each agent:
+- Reads/writes files only in its worktree
+- Commits to its own branch
+- Has its own terminal state
+- Runs until completion or error
+- Can be stopped independently
+
+### 4. Data streaming
+
+Terminal output from each agent is streamed independently:
+
+```typescript
+// Each PTY sends data over IPC with its unique ID
+pty.onData((data) => {
+  mainWindow.webContents.send('pty:data', {
+    id: 'claude-main-task-1',
+    data: data,
+  });
+});
+```
+
+The UI maintains separate terminal views for each agent.
+
+## Performance benefits
+
+### CPU utilization
+
+Multiple agents can utilize multiple CPU cores:
+
+```
+Task 1 (Claude):  ████████░░░░ Core 0-1
+Task 2 (Codex):   ░░░░████████ Core 2-3  
+Task 3 (Qwen):    ████░░░░████ Core 4-5
+Task 4 (OpenCode): ░░████░░░░░░ Core 6-7
+```
+
+### Time savings
+
+Parallel execution can dramatically reduce total time:
+
+**Sequential** (one agent at a time):
+```
+Task 1: 5 minutes
+Task 2: 7 minutes
+Task 3: 4 minutes
+Task 4: 6 minutes
+Total: 22 minutes
+```
+
+**Parallel** (all agents simultaneously):
+```
+All tasks: 7 minutes (longest task)
+Total: 7 minutes (68% faster)
+```
+
+### Resource management
+
+Emdash automatically manages:
+- **Memory**: Each PTY has reasonable memory limits
+- **File handles**: Proper cleanup on task completion
+- **Network**: API calls distributed across agents
+- **Disk I/O**: Each worktree on local filesystem
+
+## Use cases
+
+### 1. Multi-approach problem solving
+
+Try multiple solutions simultaneously:
+
+```
+Task 1: "Add user auth with JWT"
+Task 2: "Add user auth with OAuth"
+Task 3: "Add user auth with sessions"
+```
+
+Review all three implementations and merge the best one.
+
+### 2. Feature parallelization
+
+Work on independent features:
+
+```
+Task 1: "Add login page"
+Task 2: "Add signup page"  
+Task 3: "Add password reset"
+Task 4: "Add email verification"
+```
+
+Merge all features independently as they complete.
+
+### 3. Provider comparison
+
+Compare different agents on the same task:
+
+```
+Task 1 (Claude): "Refactor API endpoints"
+Task 2 (Codex): "Refactor API endpoints"
+Task 3 (Qwen): "Refactor API endpoints"
+```
+
+Evaluate which agent produces the best solution.
+
+### 4. Staged development
+
+Work on different stages of a feature:
+
+```
+Task 1: "Implement backend API"
+Task 2: "Implement frontend UI"
+Task 3: "Write integration tests"
+Task 4: "Update documentation"
+```
+
+## Limitations
+
+### What can be parallelized
+
+✅ Independent features  
+✅ Bug fixes in different areas  
+✅ Documentation and code separately  
+✅ Multiple approaches to same problem  
+✅ Refactoring different modules  
+
+### What cannot be parallelized
+
+❌ **Sequential dependencies**: Task B needs Task A's changes  
+❌ **Shared file conflicts**: Both agents modify the same line  
+❌ **Database migrations**: Must be applied in order  
+❌ **Breaking changes**: Affects other in-progress work  
+
+### Resource constraints
+
+- **API rate limits**: Multiple agents share your API quota
+- **System memory**: Each agent consumes ~200-500MB
+- **Disk space**: Each worktree is a full repository copy
+- **Network bandwidth**: Multiple simultaneous API calls
+
+## Best practices
+
+<Card title="Independent tasks" icon="diagram-project">
+  Ensure tasks are independent and won't conflict with each other's changes.
+</Card>
+
+<Card title="Monitor resources" icon="gauge">
+  Watch CPU and memory usage when running many agents simultaneously.
+</Card>
+
+<Card title="Stagger starts" icon="clock">
+  Start agents a few seconds apart to avoid API burst limits.
+</Card>
+
+<Card title="Clear goals" icon="bullseye">
+  Give each agent a specific, well-defined task to maximize efficiency.
+</Card>
+
+## Example: Multi-agent workflow
+
+Here's a complete example of parallel execution:
+
+### 1. Create tasks
+
+```typescript
+// Task 1: Backend work with Claude
+const task1 = await createTask({
+  name: 'Add REST API endpoints',
+  provider: 'claude',
+  prompt: 'Create REST endpoints for user CRUD operations',
+});
+
+// Task 2: Frontend work with Codex
+const task2 = await createTask({
+  name: 'Add user management UI',
+  provider: 'codex',
+  prompt: 'Create React components for user management',
+});
+
+// Task 3: Tests with Qwen
+const task3 = await createTask({
+  name: 'Add integration tests',
+  provider: 'qwen',
+  prompt: 'Write integration tests for user management',
+});
+```
+
+### 2. Start agents
+
+All three agents start simultaneously, each in their own:
+- Worktree (e.g., `worktrees/add-rest-api-endpoints-x7k/`)
+- PTY process (e.g., `claude-main-task-abc123`)
+- Git branch (e.g., `emdash/add-rest-api-endpoints-x7k`)
+
+### 3. Monitor progress
+
+Watch all three terminals simultaneously in the Emdash UI:
+
+```
+┌─ Task 1: Add REST API endpoints (Claude) ──────────┐
+│ Creating API routes...                              │
+│ Adding validation...                                │
+└─────────────────────────────────────────────────────┘
+
+┌─ Task 2: Add user management UI (Codex) ───────────┐
+│ Generating React components...                      │
+│ Adding form validation...                           │
+└─────────────────────────────────────────────────────┘
+
+┌─ Task 3: Add integration tests (Qwen) ─────────────┐
+│ Writing test cases...                               │
+│ Setting up test fixtures...                         │
+└─────────────────────────────────────────────────────┘
+```
+
+### 4. Review and merge
+
+As each task completes:
+1. Review the changes in isolation
+2. Create a pull request
+3. Merge when approved
+4. Other tasks continue unaffected
+
+## Advanced: Session isolation
+
+Some providers like Claude support session IDs for multiple conversations in the same worktree:
+
+```typescript
+// Main conversation
+const mainSession = deterministicUuid(`task-${taskId}`);
+// claude --session-id a3f2e1d4-...
+
+// Additional conversation
+const chatSession = deterministicUuid(`conv-${conversationId}`);
+// claude --session-id b7c9e8f2-...
+```
+
+This enables:
+- Multiple Claude conversations per task
+- Isolated chat histories
+- Independent context per conversation
+- No state collision between sessions
+
+<Tip>
+For maximum efficiency, start all tasks at once and let them run in parallel. Emdash handles all the coordination automatically.
+</Tip>
+
+<Warning>
+Be mindful of API rate limits when running many agents simultaneously. Most AI providers have per-minute or per-hour limits.
+</Warning>

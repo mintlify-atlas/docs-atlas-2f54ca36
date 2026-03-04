@@ -1,0 +1,401 @@
+---
+title: "Agent providers"
+description: "How Emdash detects, configures, and orchestrates CLI coding agents"
+---
+
+## Provider system
+
+Emdash supports 22 CLI coding agents through a unified provider system. Each agent is defined as a `ProviderDefinition` in the registry with configuration for detection, invocation, and integration.
+
+## Provider registry
+
+All agent providers are centrally defined in `src/shared/providers/registry.ts`. This registry contains metadata for:
+
+- Binary detection and version checking
+- Auto-approval flags for non-interactive mode
+- Initial prompt delivery mechanisms
+- Session isolation configuration
+- Resume/continue behavior
+
+### Supported providers
+
+From `registry.ts:1-24`:
+
+```typescript
+export const PROVIDER_IDS = [
+  'codex',
+  'claude',
+  'qwen',
+  'droid',
+  'gemini',
+  'cursor',
+  'copilot',
+  'amp',
+  'opencode',
+  'charm',
+  'auggie',
+  'goose',
+  'kimi',
+  'kilocode',
+  'kiro',
+  'rovo',
+  'cline',
+  'continue',
+  'codebuff',
+  'mistral',
+  'pi',
+  'autohand',
+] as const;
+```
+
+## Provider definition structure
+
+Each provider is defined with the following configuration:
+
+```typescript
+export type ProviderDefinition = {
+  id: ProviderId;
+  name: string;
+  docUrl?: string;
+  installCommand?: string;
+  commands?: string[];              // Commands for detection
+  versionArgs?: string[];           // Args to get version
+  detectable?: boolean;             // Whether to auto-detect
+  cli?: string;                     // Binary name to execute
+  autoApproveFlag?: string;         // Flag for non-interactive mode
+  initialPromptFlag?: string;       // How to pass initial prompt
+  useKeystrokeInjection?: boolean;  // Type prompt into TUI
+  resumeFlag?: string;              // Flag to resume existing session
+  sessionIdFlag?: string;           // Flag for session isolation
+  defaultArgs?: string[];           // Always-included args
+  planActivateCommand?: string;     // Command to activate planning mode
+  autoStartCommand?: string;        // Command to auto-start agent
+  icon?: string;                    // Icon file
+  terminalOnly?: boolean;           // Whether agent is TUI-only
+};
+```
+
+## Detection
+
+Emdash automatically detects which agents are installed on your system by checking for their CLI binaries.
+
+### Detection commands
+
+From `registry.ts:76-91` (Claude Code example):
+
+```typescript
+{
+  id: 'claude',
+  name: 'Claude Code',
+  docUrl: 'https://docs.anthropic.com/claude/docs/claude-code',
+  installCommand: 'curl -fsSL https://claude.ai/install.sh | bash',
+  commands: ['claude'],           // Binary to detect
+  versionArgs: ['--version'],     // Args to verify installation
+  cli: 'claude',
+  autoApproveFlag: '--dangerously-skip-permissions',
+  initialPromptFlag: '',
+  resumeFlag: '-c -r',
+  sessionIdFlag: '--session-id',
+  planActivateCommand: '/plan',
+  icon: 'claude.png',
+  terminalOnly: true,
+}
+```
+
+### Version checking
+
+When detecting agents, Emdash runs:
+
+```bash
+{command} {versionArgs}
+```
+
+For example:
+```bash
+claude --version
+codex --version
+qwen --version
+```
+
+## Auto-approval flags
+
+Most agents require explicit approval for dangerous operations. Emdash can automatically pass approval flags for fully autonomous execution:
+
+| Provider | Auto-approval flag |
+|----------|-------------------|
+| Claude | `--dangerously-skip-permissions` |
+| Codex | `--full-auto` |
+| Amp | `--dangerously-allow-all` |
+| Qwen | `--yolo` |
+| Gemini | `--yolo` |
+| Kimi | `--yolo` |
+| Kilocode | `--auto` |
+| Copilot | `--allow-all-tools` |
+| Mistral | `--auto-approve` |
+| Autohand | `--unrestricted` |
+
+From `registry.ts:77-90` (Claude example):
+
+```typescript
+autoApproveFlag: '--dangerously-skip-permissions',
+```
+
+## Initial prompt delivery
+
+Agents receive their initial task prompt through different mechanisms:
+
+### CLI flag delivery
+
+Most agents accept the prompt via a command-line flag:
+
+```typescript
+// Continue
+initialPromptFlag: '-p'
+// Example: cn -p "Add user authentication"
+
+// Kimi  
+initialPromptFlag: '-c'
+// Example: kimi -c "Fix the login bug"
+
+// Mistral
+initialPromptFlag: '--prompt'
+// Example: vibe --prompt "Refactor the API"
+```
+
+### Positional delivery
+
+Some agents take the prompt as a positional argument:
+
+```typescript
+// Claude, Codex, Kilocode, etc.
+initialPromptFlag: ''
+// Example: claude "Add user authentication"
+```
+
+### Keystroke injection
+
+Some TUI-only agents have no CLI flag for prompts. Emdash uses **keystroke injection** to type the prompt into the terminal after the agent starts:
+
+From `registry.ts:146-159` (Amp example):
+
+```typescript
+{
+  id: 'amp',
+  name: 'Amp',
+  docUrl: 'https://ampcode.com/manual#install',
+  installCommand: 'npm install -g @sourcegraph/amp@latest',
+  commands: ['amp'],
+  versionArgs: ['--version'],
+  cli: 'amp',
+  autoApproveFlag: '--dangerously-allow-all',
+  initialPromptFlag: '',
+  useKeystrokeInjection: true,  // Types prompt into TUI
+  icon: 'ampcode.png',
+  terminalOnly: true,
+}
+```
+
+Agents with `useKeystrokeInjection: true`:
+- **Amp** — No CLI prompt flag
+- **OpenCode** — TUI-first design
+
+## Session isolation
+
+Emdash supports multiple concurrent conversations per task. Some agents require explicit session IDs to prevent state collision.
+
+### Claude session IDs
+
+Claude Code supports the `--session-id` flag for conversation isolation:
+
+From `registry.ts:87`:
+
+```typescript
+sessionIdFlag: '--session-id',
+```
+
+Emdash generates a deterministic UUID from the conversation ID:
+
+```typescript
+/**
+ * Generate a deterministic UUID from an arbitrary string.
+ * Uses SHA-256 and formats 16 bytes as a UUID v4-compatible string
+ * (with version and variant bits set per RFC 4122).
+ */
+function deterministicUuid(input: string): string {
+  const hash = crypto.createHash('sha256').update(input).digest();
+  // Set version 4 bits
+  hash[6] = (hash[6] & 0x0f) | 0x40;
+  // Set variant bits
+  hash[8] = (hash[8] & 0x3f) | 0x80;
+  const hex = hash.toString('hex').slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+```
+
+This allows multiple Claude conversations in the same worktree:
+
+```bash
+# Main conversation
+claude --session-id a3f2e1d4-... "Add authentication"
+
+# Additional conversation (different session ID)
+claude --session-id b7c9e8f2-... "Fix the database schema"
+```
+
+## Resume behavior
+
+Many agents support resuming previous sessions:
+
+| Provider | Resume flag |
+|----------|-------------|
+| Claude | `-c -r` |
+| Codex | `resume --last` |
+| Qwen | `--continue` |
+| Gemini | `--resume` |
+| Kilocode | `--continue` |
+| Droid | `-r` |
+| Continue | `--resume` |
+| Pi | `-c` |
+
+From `registry.ts:86`:
+
+```typescript
+resumeFlag: '-c -r',
+```
+
+## Environment variables
+
+Agents need API keys and authentication tokens. Emdash passes specific environment variables to agent PTYs.
+
+From `ptyManager.ts:18-52`:
+
+```typescript
+/**
+ * Environment variables to pass through for agent authentication.
+ * These are passed to CLI tools during direct spawn (which skips shell config).
+ */
+const AGENT_ENV_VARS = [
+  'AMP_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'AUTOHAND_API_KEY',
+  'AUGMENT_SESSION_AUTH',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_DEFAULT_REGION',
+  'AWS_PROFILE',
+  'AWS_REGION',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SESSION_TOKEN',
+  'AZURE_OPENAI_API_ENDPOINT',
+  'AZURE_OPENAI_API_KEY',
+  'AZURE_OPENAI_KEY',
+  'CODEBUFF_API_KEY',
+  'COPILOT_CLI_TOKEN',
+  'CURSOR_API_KEY',
+  'DASHSCOPE_API_KEY',
+  'FACTORY_API_KEY',
+  'GEMINI_API_KEY',
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GOOGLE_API_KEY',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'GOOGLE_CLOUD_LOCATION',
+  'GOOGLE_CLOUD_PROJECT',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'KIMI_API_KEY',
+  'MISTRAL_API_KEY',
+  'MOONSHOT_API_KEY',
+  'NO_PROXY',
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+];
+```
+
+<Warning>
+When adding a new provider, you **must** add any required API key environment variables to the `AGENT_ENV_VARS` list in `ptyManager.ts`.
+</Warning>
+
+## Default arguments
+
+Some agents require specific arguments for proper operation:
+
+From `registry.ts:199-210` (Auggie example):
+
+```typescript
+{
+  id: 'auggie',
+  name: 'Auggie',
+  docUrl: 'https://docs.augmentcode.com/cli/overview',
+  installCommand: 'npm install -g @augmentcode/auggie',
+  commands: ['auggie'],
+  versionArgs: ['--version'],
+  cli: 'auggie',
+  initialPromptFlag: '',
+  // otherwise user is prompted each time before prompt is passed
+  defaultArgs: ['--allow-indexing'],
+  icon: 'Auggie.svg',
+  terminalOnly: true,
+}
+```
+
+From `registry.ts:212-224` (Goose example):
+
+```typescript
+{
+  id: 'goose',
+  name: 'Goose',
+  docUrl: 'https://block.github.io/goose/docs/quickstart/',
+  installCommand:
+    'curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | bash',
+  detectable: false,
+  cli: 'goose',
+  // run subcommand with -s for interactive mode after initial prompt
+  defaultArgs: ['run', '-s'],
+  initialPromptFlag: '-t',
+  icon: 'goose.png',
+  terminalOnly: true,
+}
+```
+
+## Adding a new provider
+
+To add support for a new agent:
+
+1. **Add provider definition** to `src/shared/providers/registry.ts`:
+
+```typescript
+{
+  id: 'newagent',
+  name: 'New Agent',
+  docUrl: 'https://newagent.com/docs',
+  installCommand: 'npm install -g newagent',
+  commands: ['newagent'],
+  versionArgs: ['--version'],
+  cli: 'newagent',
+  autoApproveFlag: '--auto',
+  initialPromptFlag: '-p',
+  icon: 'newagent.png',
+  terminalOnly: true,
+}
+```
+
+2. **Add API key to environment variables** in `src/main/services/ptyManager.ts`:
+
+```typescript
+const AGENT_ENV_VARS = [
+  // ... existing vars ...
+  'NEWAGENT_API_KEY',
+];
+```
+
+3. **Add provider icon** to `src/renderer/assets/agent-icons/newagent.png`
+
+4. **Test detection** by installing the agent and verifying Emdash detects it
+
+<Tip>
+Use `detectable: false` for agents that are difficult to detect or require special installation procedures.
+</Tip>
+
+## Provider status caching
+
+Emdash caches provider detection results to avoid repeated system calls. The cache is managed by `providerStatusCache` and automatically refreshed when settings change.

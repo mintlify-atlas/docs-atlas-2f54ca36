@@ -1,0 +1,394 @@
+---
+title: Installation
+description: Install Emdash on macOS, Windows, or Linux and prepare your system
+---
+
+Emdash is distributed as a native desktop application for macOS, Windows, and Linux. Choose your platform below to get started.
+
+## System requirements
+
+Before installing Emdash, ensure your system meets these requirements:
+
+<AccordionGroup>
+  <Accordion title="Operating system">
+    - **macOS**: 10.15 (Catalina) or later
+    - **Windows**: Windows 10 (64-bit) or later
+    - **Linux**: Ubuntu 20.04+, Debian 10+, Fedora 32+, or any modern distribution with GLIBC 2.28+
+  </Accordion>
+
+  <Accordion title="Node.js (for agent installation)">
+    Most coding agents require Node.js. Emdash works best with:
+
+    - **Node.js**: 20.x or 22.x (recommended: 22.20.0)
+    - Install via [nodejs.org](https://nodejs.org) or use [nvm](https://github.com/nvm-sh/nvm)
+
+    Check your version:
+    ```bash
+    node --version
+    ```
+  </Accordion>
+
+  <Accordion title="Git">
+    Git is required for all worktree operations:
+
+    - **Git**: 2.25.0 or later (worktree support)
+    - Install via your package manager or [git-scm.com](https://git-scm.com/)
+
+    Check your version:
+    ```bash
+    git --version
+    ```
+  </Accordion>
+
+  <Accordion title="Optional: GitHub CLI">
+    For GitHub integration (PR creation, issue fetching), install the GitHub CLI:
+
+    - **GitHub CLI (`gh`)**: 2.0.0 or later
+    - Install from [cli.github.com](https://cli.github.com/)
+
+    Authenticate after installing:
+    ```bash
+    gh auth login
+    ```
+
+    <Info>GitHub CLI is optional. If you don't need GitHub features, you can skip this.</Info>
+  </Accordion>
+</AccordionGroup>
+
+## macOS
+
+Emdash supports both Apple Silicon (M1/M2/M3) and Intel Macs.
+
+### Download directly
+
+<Tabs>
+  <Tab title="Apple Silicon (M1/M2/M3)">
+    Download the ARM64 build:
+
+    ```bash
+    curl -LO https://github.com/generalaction/emdash/releases/latest/download/emdash-arm64.dmg
+    ```
+
+    Then open the `.dmg` file and drag Emdash to your Applications folder.
+  </Tab>
+
+  <Tab title="Intel (x64)">
+    Download the x64 build:
+
+    ```bash
+    curl -LO https://github.com/generalaction/emdash/releases/latest/download/emdash-x64.dmg
+    ```
+
+    Then open the `.dmg` file and drag Emdash to your Applications folder.
+  </Tab>
+</Tabs>
+
+### Install via Homebrew
+
+The easiest way to install and update Emdash on macOS:
+
+```bash
+brew install --cask emdash
+```
+
+Homebrew automatically selects the correct architecture for your Mac.
+
+### First launch
+
+When you first launch Emdash, macOS may show a security warning because the app is downloaded from the internet.
+
+**To allow Emdash:**
+
+1. Open **System Settings → Privacy & Security**
+2. Scroll down to the **Security** section
+3. Click **Open Anyway** next to the Emdash warning
+4. Confirm by clicking **Open** in the dialog
+
+Alternatively, right-click Emdash in Finder and select **Open**, then click **Open** in the confirmation dialog.
+
+## Windows
+
+Emdash provides both an installer and a portable executable for Windows.
+
+<Tabs>
+  <Tab title="MSI Installer (Recommended)">
+    The MSI installer registers Emdash with Windows and adds it to your Start Menu:
+
+    ```powershell
+    # Download via PowerShell
+    Invoke-WebRequest -Uri "https://github.com/generalaction/emdash/releases/latest/download/emdash-x64.msi" -OutFile "emdash-x64.msi"
+    ```
+
+    Or download directly:
+    - [emdash-x64.msi](https://github.com/generalaction/emdash/releases/latest/download/emdash-x64.msi)
+
+    Double-click the `.msi` file to install. Follow the installer prompts.
+
+    The installer places Emdash in `C:\Program Files\Emdash` by default.
+  </Tab>
+
+  <Tab title="Portable Executable">
+    The portable version runs without installation — perfect for USB drives or restricted environments:
+
+    ```powershell
+    # Download via PowerShell
+    Invoke-WebRequest -Uri "https://github.com/generalaction/emdash/releases/latest/download/emdash-x64.exe" -OutFile "emdash-x64.exe"
+    ```
+
+    Or download directly:
+    - [emdash-x64.exe](https://github.com/generalaction/emdash/releases/latest/download/emdash-x64.exe)
+
+    Run the `.exe` file directly. Emdash stores its data in `%APPDATA%\emdash`.
+  </Tab>
+</Tabs>
+
+<Note>
+  Windows may show a SmartScreen warning on first launch. Click **More info**, then **Run anyway** to proceed.
+</Note>
+
+## Linux
+
+Emdash provides multiple formats for Linux distributions.
+
+<Tabs>
+  <Tab title="AppImage (Universal)">
+    AppImage works on most Linux distributions without installation:
+
+    ```bash
+    # Download AppImage
+    curl -LO https://github.com/generalaction/emdash/releases/latest/download/emdash-x86_64.AppImage
+
+    # Make it executable
+    chmod +x emdash-x86_64.AppImage
+
+    # Run Emdash
+    ./emdash-x86_64.AppImage
+    ```
+
+    Optionally, integrate with your desktop environment using [AppImageLauncher](https://github.com/TheAssassin/AppImageLauncher).
+  </Tab>
+
+  <Tab title="Debian/Ubuntu (.deb)">
+    For Debian, Ubuntu, Linux Mint, and derivatives:
+
+    ```bash
+    # Download .deb package
+    curl -LO https://github.com/generalaction/emdash/releases/latest/download/emdash-amd64.deb
+
+    # Install with dpkg
+    sudo dpkg -i emdash-amd64.deb
+
+    # Fix any missing dependencies
+    sudo apt-get install -f
+    ```
+
+    Launch from your application menu or run `emdash` in the terminal.
+  </Tab>
+
+  <Tab title="Fedora/RHEL (.rpm)">
+    For Fedora, RHEL, CentOS, and derivatives:
+
+    ```bash
+    # Download .rpm package
+    curl -LO https://github.com/generalaction/emdash/releases/latest/download/emdash-x86_64.rpm
+
+    # Install with dnf
+    sudo dnf install emdash-x86_64.rpm
+
+    # Or use rpm directly
+    sudo rpm -i emdash-x86_64.rpm
+    ```
+
+    Launch from your application menu or run `emdash` in the terminal.
+  </Tab>
+</Tabs>
+
+### Linux dependencies
+
+Emdash's Electron build requires these system libraries (usually pre-installed):
+
+- `libgtk-3-0`
+- `libnotify4`
+- `libnss3`
+- `libxtst6`
+- `libatspi2.0-0`
+- `libsecret-1-0` (for secure credential storage)
+
+If Emdash fails to launch, install missing dependencies:
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install libgtk-3-0 libnotify4 libnss3 libxtst6 libatspi2.0-0 libsecret-1-0
+
+# Fedora/RHEL
+sudo dnf install gtk3 libnotify nss libXtst at-spi2-core libsecret
+```
+
+## Verify installation
+
+After installing Emdash, verify it's working:
+
+<Steps>
+  <Step title="Launch Emdash">
+    Open the application from your Applications folder (macOS), Start Menu (Windows), or application launcher (Linux).
+  </Step>
+
+  <Step title="Check the welcome screen">
+    You should see the Emdash welcome screen with options to add a project or connect to a remote server.
+  </Step>
+
+  <Step title="Verify system requirements">
+    Emdash will detect installed agents automatically. To verify your system is ready:
+
+    ```bash
+    # Check Node.js (for agent installation)
+    node --version
+
+    # Check Git (required)
+    git --version
+
+    # Check GitHub CLI (optional)
+    gh --version
+    ```
+  </Step>
+</Steps>
+
+## Install coding agents
+
+Emdash orchestrates CLI coding agents — you need to install at least one. Agents are separate CLI tools that run independently of Emdash.
+
+<Warning>
+  **Important**: Coding agents are not bundled with Emdash. You must install them separately using their native installation methods (npm, curl, etc.).
+</Warning>
+
+### Quick install: Popular agents
+
+<CodeGroup>
+  ```bash Claude Code
+  # Claude Code (Anthropic)
+  curl -fsSL https://claude.ai/install.sh | bash
+  ```
+
+  ```bash Codex
+  # Codex (OpenAI)
+  npm install -g @openai/codex
+  ```
+
+  ```bash Qwen Code
+  # Qwen Code
+  npm install -g @qwen-code/qwen-code
+  ```
+
+  ```bash Amp
+  # Amp (Sourcegraph)
+  npm install -g @sourcegraph/amp@latest
+  ```
+
+  ```bash GitHub Copilot
+  # GitHub Copilot CLI
+  npm install -g @github/copilot
+  ```
+</CodeGroup>
+
+After installing an agent, restart Emdash or click **Refresh Agents** in Settings. Emdash detects agents by running `<cli> --version` for each provider.
+
+<Tip>
+  You can install multiple agents and switch between them per task. See the full provider matrix at [Features → Providers](/features/providers).
+</Tip>
+
+## Data storage locations
+
+Emdash stores app data locally in a SQLite database:
+
+- **macOS**: `~/Library/Application Support/emdash/emdash.db`
+- **Windows**: `%APPDATA%\emdash\emdash.db`
+- **Linux**: `~/.config/emdash/emdash.db`
+
+You can override the database location with the `EMDASH_DB_FILE` environment variable.
+
+<Note>
+  While Emdash stores data locally, **coding agents send your code to their respective cloud APIs** (OpenAI, Anthropic, etc.) for processing. Review each provider's data handling policies.
+</Note>
+
+## Update Emdash
+
+Emdash checks for updates automatically and prompts you to install them.
+
+### Manual update
+
+To update manually:
+
+<Tabs>
+  <Tab title="macOS (Homebrew)">
+    ```bash
+    brew upgrade emdash
+    ```
+  </Tab>
+
+  <Tab title="macOS (Manual)">
+    Download the latest `.dmg` from [GitHub Releases](https://github.com/generalaction/emdash/releases/latest) and replace your existing installation.
+  </Tab>
+
+  <Tab title="Windows">
+    Download the latest `.msi` installer from [GitHub Releases](https://github.com/generalaction/emdash/releases/latest) and run it. The installer will upgrade your existing installation.
+  </Tab>
+
+  <Tab title="Linux">
+    Download the latest package for your distribution from [GitHub Releases](https://github.com/generalaction/emdash/releases/latest) and install it. Package managers will handle the upgrade.
+  </Tab>
+</Tabs>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Emdash won't launch">
+    - **macOS**: Check System Settings → Privacy & Security and allow the app
+    - **Windows**: Allow through SmartScreen by clicking "More info" then "Run anyway"
+    - **Linux**: Ensure all dependencies are installed (see [Linux dependencies](#linux-dependencies))
+  </Accordion>
+
+  <Accordion title="Agents not detected">
+    Emdash looks for agents in your `PATH`. If agents aren't detected:
+
+    1. Verify the agent is installed: `<cli> --version` (e.g., `claude --version`)
+    2. Check your PATH includes the installation directory
+    3. Restart Emdash or click **Refresh Agents** in Settings
+    4. On macOS, Emdash adds Homebrew, npm global, and nvm paths automatically
+  </Accordion>
+
+  <Accordion title="Database errors">
+    If you encounter SQLite errors:
+
+    1. Quit Emdash completely
+    2. Back up your database (see [Data storage locations](#data-storage-locations))
+    3. Delete the database file — Emdash will recreate it on next launch
+    4. If the error persists, file an issue on GitHub
+  </Accordion>
+
+  <Accordion title="Native module errors (development)">
+    If building from source and hitting native module errors:
+
+    ```bash
+    # Rebuild native modules for your Electron version
+    pnpm run rebuild
+
+    # Or clean install
+    pnpm run reset
+    ```
+
+    See `AGENTS.md` in the source repo for full development setup.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+Now that Emdash is installed, let's get you running your first agent:
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Follow the quickstart guide to run your first agent task in under 5 minutes.
+  </Card>
+  <Card title="Features" icon="sparkles" href="/features/providers">
+    Explore all 22+ supported providers and learn about advanced features.
+  </Card>
+</CardGroup>

@@ -1,0 +1,762 @@
+---
+title: "PTY Manager"
+description: "Pseudo-terminal lifecycle management for agent sessions"
+---
+
+The `ptyManager` spawns and manages pseudo-terminals (PTYs) for CLI agents in Emdash. It handles three spawn modes, session isolation for multi-chat scenarios, environment variable passthrough, and agent command construction.
+
+## Overview
+
+Emdash runs CLI agents in PTYs using the [node-pty](https://github.com/microsoft/node-pty) library. The PTY manager provides:
+
+- **Three spawn modes**: Shell-based, direct spawn, and SSH
+- **Session isolation**: Multi-chat support via deterministic session UUIDs (Claude only)
+- **Environment control**: Minimal clean environment with selective passthrough
+- **Provider detection**: Automatic CLI detection and argument construction
+- **Shell respawn**: Drops user into a shell after agent exits
+
+## Spawn Modes
+
+### startPty (Shell-based)
+
+Spawn an agent via the user's login shell. This is the default mode that loads shell configuration (`.bashrc`, `.zshrc`, etc.).
+
+```typescript
+async function startPty(options: {
+  id: string;
+  cwd?: string;
+  shell?: string;
+  env?: NodeJS.ProcessEnv;
+  cols?: number;
+  rows?: number;
+  autoApprove?: boolean;
+  initialPrompt?: string;
+  skipResume?: boolean;
+  shellSetup?: string;
+  tmux?: boolean;
+}): Promise<IPty>
+```
+
+<ParamField path="id" type="string" required>
+  PTY ID in format `{providerId}-main-{taskId}` or `{providerId}-chat-{conversationId}`
+</ParamField>
+
+<ParamField path="cwd" type="string">
+  Working directory (defaults to `process.cwd()` or user home)
+</ParamField>
+
+<ParamField path="shell" type="string">
+  Shell binary (defaults to `$SHELL` or platform default)
+</ParamField>
+
+<ParamField path="env" type="NodeJS.ProcessEnv">
+  Additional environment variables (merged with defaults)
+</ParamField>
+
+<ParamField path="cols" type="number">
+  Terminal columns (default: 80)
+</ParamField>
+
+<ParamField path="rows" type="number">
+  Terminal rows (default: 24)
+</ParamField>
+
+<ParamField path="autoApprove" type="boolean">
+  Enable auto-approve mode (passes `autoApproveFlag` to CLI)
+</ParamField>
+
+<ParamField path="initialPrompt" type="string">
+  Initial prompt to send to agent on startup
+</ParamField>
+
+<ParamField path="skipResume" type="boolean">
+  Skip resume flag (for new sessions)
+</ParamField>
+
+<ParamField path="shellSetup" type="string">
+  Shell commands to run before spawning agent (e.g., `cd /tmp && source venv/bin/activate`)
+</ParamField>
+
+<ParamField path="tmux" type="boolean">
+  Wrap session in tmux for persistence (Linux/macOS only)
+</ParamField>
+
+**Command construction:**
+
+For recognized providers (e.g., `claude`), the manager builds:
+
+```bash
+{shell} -lic "{cli} {args}; exec {shell} -il"
+```
+
+**Example:**
+
+```bash
+/bin/zsh -lic "claude --session-id abc123 --dangerously-skip-permissions; exec /bin/zsh -il"
+```
+
+After the agent exits, `exec {shell} -il` drops the user into a clean interactive shell.
+
+**Shell flag combinations:**
+
+- **zsh**: `-lic` (login + interactive + command)
+- **bash**: `-lic`
+- **fish**: `-l -i -c`
+- **sh**: `-lc` (POSIX sh doesn't support `-i` with `-c`)
+
+**Example:**
+
+```typescript
+const pty = await startPty({
+  id: 'claude-main-task_abc',
+  cwd: '/Users/dev/my-project',
+  shell: 'claude',
+  autoApprove: true,
+  initialPrompt: 'Fix the login bug',
+  cols: 120,
+  rows: 32,
+});
+
+pty.onData((data) => {
+  // Stream output to UI
+  mainWindow.webContents.send('pty:data', { id: 'claude-main-task_abc', data });
+});
+
+pty.onExit(() => {
+  // Cleanup
+  removePtyRecord('claude-main-task_abc');
+});
+```
+
+### startDirectPty (Direct spawn)
+
+Spawn an agent directly without a shell wrapper. This is ~2-3x faster because it skips shell config loading (oh-my-zsh, nvm, rbenv, etc.).
+
+```typescript
+function startDirectPty(options: {
+  id: string;
+  providerId: string;
+  cwd: string;
+  cols?: number;
+  rows?: number;
+  autoApprove?: boolean;
+  initialPrompt?: string;
+  env?: Record<string, string>;
+  resume?: boolean;
+  tmux?: boolean;
+}): IPty | null
+```
+
+<ParamField path="providerId" type="string" required>
+  Provider ID (e.g., `claude`, `codex`, `qwen`)
+</ParamField>
+
+<ParamField path="resume" type="boolean">
+  Whether to resume an existing session
+</ParamField>
+
+**Returns `null` if:**
+
+- CLI path is not cached in `providerStatusCache`
+- Custom CLI requires shell parsing (contains pipes, aliases, etc.)
+- Tmux is enabled (requires shell wrapper)
+
+**When successful:**
+
+1. Looks up CLI path from `providerStatusCache.get(providerId).path`
+2. Builds CLI arguments (same logic as shell-based mode)
+3. Spawns process directly: `pty.spawn(cliPath, cliArgs, { ... })`
+4. On agent exit, spawns a shell via `onDirectCliExitCallback(id, cwd)`
+
+**Example:**
+
+```typescript
+const pty = startDirectPty({
+  id: 'claude-main-task_abc',
+  providerId: 'claude',
+  cwd: '/Users/dev/my-project',
+  autoApprove: true,
+  initialPrompt: 'Implement feature X',
+  resume: false,
+});
+
+if (!pty) {
+  // Fallback to startPty
+  pty = await startPty({ ... });
+}
+```
+
+### startSshPty (SSH sessions)
+
+Spawn an interactive SSH session in a PTY.
+
+```typescript
+function startSshPty(options: {
+  id: string;
+  target: string;
+  sshArgs?: string[];
+  remoteInitCommand?: string;
+  cols?: number;
+  rows?: number;
+  env?: Record<string, string>;
+}): IPty
+```
+
+<ParamField path="target" type="string" required>
+  SSH target (alias from `~/.ssh/config` or `user@host`)
+</ParamField>
+
+<ParamField path="sshArgs" type="string[]">
+  Additional SSH arguments (e.g., `['-p', '2222', '-i', '/path/to/key']`)
+</ParamField>
+
+<ParamField path="remoteInitCommand" type="string">
+  Command to execute on remote host (runs via remote shell)
+</ParamField>
+
+**Command construction:**
+
+```bash
+ssh -tt {sshArgs...} {target} {remoteInitCommand}
+```
+
+**Environment:**
+
+Includes `SSH_AUTH_SOCK` for agent forwarding and all `AGENT_ENV_VARS` for API keys.
+
+**Example:**
+
+```typescript
+const pty = startSshPty({
+  id: 'claude-ssh-task_abc',
+  target: 'dev-server',
+  sshArgs: ['-p', '2222'],
+  remoteInitCommand: 'cd /app && claude --dangerously-skip-permissions',
+  cols: 120,
+  rows: 32,
+});
+```
+
+## Session Isolation
+
+### applySessionIsolation
+
+Apply session isolation for Claude multi-chat scenarios. Generates deterministic UUIDs for `--session-id` and `--resume` flags.
+
+```typescript
+function applySessionIsolation(
+  cliArgs: string[],
+  provider: ProviderDefinition,
+  id: string,
+  cwd: string,
+  isResume: boolean
+): boolean
+```
+
+<ParamField path="cliArgs" type="string[]" required>
+  CLI arguments array (modified in-place)
+</ParamField>
+
+<ParamField path="provider" type="ProviderDefinition" required>
+  Provider definition (must have `sessionIdFlag`)
+</ParamField>
+
+<ParamField path="id" type="string" required>
+  PTY ID
+</ParamField>
+
+<ParamField path="cwd" type="string" required>
+  Working directory (used for session validation)
+</ParamField>
+
+<ParamField path="isResume" type="boolean" required>
+  Whether this is a resume operation
+</ParamField>
+
+**Returns `true`** if session isolation was applied, **`false`** otherwise.
+
+**Decision tree:**
+
+1. **Known session in map** → `--resume <uuid>`
+2. **Additional chat (new)** → `--session-id <uuid>` (create)
+3. **Multi-chat transition** → `--session-id <discovered-uuid>` (adopt existing)
+4. **First-time main chat** → `--session-id <uuid>` (create, proactive)
+5. **Existing single-chat resume** → (no isolation, caller uses generic `-c -r`)
+
+**Session map:**
+
+Persisted to `{userData}/pty-session-map.json`:
+
+```json
+{
+  "claude-main-task_abc": {
+    "uuid": "a1b2c3d4-e5f6-4a1b-8c9d-0e1f2a3b4c5d",
+    "cwd": "/Users/dev/my-project"
+  },
+  "claude-chat-conv_123": {
+    "uuid": "f6e5d4c3-b2a1-4f9e-8d7c-6b5a4c3d2e1f",
+    "cwd": "/Users/dev/my-project"
+  }
+}
+```
+
+**UUID generation:**
+
+```typescript
+function deterministicUuid(input: string): string {
+  const hash = crypto.createHash('sha256').update(input).digest();
+  hash[6] = (hash[6] & 0x0f) | 0x40; // Set version 4 bits
+  hash[8] = (hash[8] & 0x3f) | 0x80; // Set variant bits
+  return formatAsUuid(hash);
+}
+```
+
+Input is the PTY ID suffix (e.g., `task_abc` or `conv_123`).
+
+**Session discovery:**
+
+For the main chat transitioning to multi-chat mode, the service scans `~/.claude/projects/{encoded-path}/` for existing session files and adopts the most recently modified one.
+
+**Session validation (Claude only):**
+
+Before resuming, validates:
+
+- Session file exists: `~/.claude/projects/{encoded-path}/{uuid}.jsonl`
+- Working directory matches (sessions are cwd-scoped)
+
+Stale sessions (missing file or cwd mismatch) are automatically removed from the map.
+
+## PTY ID Format
+
+### Format
+
+```
+{providerId}-{kind}-{suffix}
+```
+
+- **providerId**: `claude`, `codex`, `qwen`, etc.
+- **kind**: `main` (main conversation) or `chat` (additional conversation)
+- **suffix**: `{taskId}` for main, `{conversationId}` for chat
+
+**Examples:**
+
+```
+claude-main-task_abc123
+claude-chat-conv_def456
+codex-main-task_xyz789
+```
+
+### Parsing
+
+Defined in `src/shared/ptyId.ts`:
+
+```typescript
+export function parsePtyId(ptyId: string): {
+  providerId: string;
+  kind: 'main' | 'chat';
+  suffix: string;
+} | null
+```
+
+## Environment Variables
+
+### Minimal Environment
+
+**Why minimal?** When Emdash runs as an AppImage (or other packaged Electron apps), `process.env` contains packaging artifacts (`PYTHONHOME`, `APPDIR`, `APPIMAGE`) that break user tools (especially Python virtual environments).
+
+**Solution:** Build a clean environment and let login shells rebuild from user config (`.bashrc`, `.zshrc`, etc.).
+
+**Base environment:**
+
+```typescript
+const useEnv: Record<string, string> = {
+  TERM: 'xterm-256color',
+  COLORTERM: 'truecolor',
+  TERM_PROGRAM: 'emdash',
+  HOME: process.env.HOME || os.homedir(),
+  USER: process.env.USER || os.userInfo().username,
+  SHELL: process.env.SHELL || defaultShell,
+  LANG: process.env.LANG, // Optional
+  TMPDIR: process.env.TMPDIR, // Optional
+  DISPLAY: process.env.DISPLAY, // X11 (Linux)
+  // ... (see Display Environment Variables below)
+};
+```
+
+**Windows additions:**
+
+```typescript
+if (process.platform === 'win32') {
+  useEnv.PATH = process.env.PATH || '';
+  useEnv.PATHEXT = process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD';
+  useEnv.SystemRoot = process.env.SystemRoot || 'C:\\Windows';
+  useEnv.ComSpec = process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe';
+  useEnv.TEMP = process.env.TEMP || process.env.TMP || '';
+  // ... (see getWindowsEssentialEnv)
+}
+```
+
+### Agent Environment Variables
+
+**Passthrough list** (`AGENT_ENV_VARS`):
+
+```typescript
+const AGENT_ENV_VARS = [
+  'AMP_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'AUTOHAND_API_KEY',
+  'AUGMENT_SESSION_AUTH',
+  'AWS_ACCESS_KEY_ID',
+  'AWS_DEFAULT_REGION',
+  'AWS_PROFILE',
+  'AWS_REGION',
+  'AWS_SECRET_ACCESS_KEY',
+  'AWS_SESSION_TOKEN',
+  'AZURE_OPENAI_API_ENDPOINT',
+  'AZURE_OPENAI_API_KEY',
+  'AZURE_OPENAI_KEY',
+  'CODEBUFF_API_KEY',
+  'COPILOT_CLI_TOKEN',
+  'CURSOR_API_KEY',
+  'DASHSCOPE_API_KEY',
+  'FACTORY_API_KEY',
+  'GEMINI_API_KEY',
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GOOGLE_API_KEY',
+  'GOOGLE_APPLICATION_CREDENTIALS',
+  'GOOGLE_CLOUD_LOCATION',
+  'GOOGLE_CLOUD_PROJECT',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'KIMI_API_KEY',
+  'MISTRAL_API_KEY',
+  'MOONSHOT_API_KEY',
+  'NO_PROXY',
+  'OPENAI_API_KEY',
+  'OPENAI_BASE_URL',
+];
+```
+
+**To add a new API key:**
+
+1. Add to `AGENT_ENV_VARS` in `ptyManager.ts`
+2. Add provider to `src/shared/providers/registry.ts`
+
+### Display Environment Variables
+
+For GUI operations (browser launching, clipboard, etc.) from within PTY sessions:
+
+```typescript
+const DISPLAY_ENV_VARS = [
+  'DISPLAY',              // X11 display server
+  'XAUTHORITY',           // X11 auth cookie
+  'WAYLAND_DISPLAY',      // Wayland compositor socket
+  'XDG_RUNTIME_DIR',      // Wayland/D-Bus sockets (e.g., /run/user/1000)
+  'XDG_CURRENT_DESKTOP',  // Used by xdg-open for DE detection
+  'XDG_SESSION_TYPE',     // X11 vs Wayland
+  'DBUS_SESSION_BUS_ADDRESS', // Desktop portals
+];
+```
+
+### Agent Event Hooks
+
+For CLI hooks to call back to Emdash:
+
+```typescript
+if (hookPort > 0) {
+  useEnv['EMDASH_HOOK_PORT'] = String(hookPort);
+  useEnv['EMDASH_PTY_ID'] = id;
+  useEnv['EMDASH_HOOK_TOKEN'] = agentEventService.getToken();
+}
+```
+
+## Provider Command Configuration
+
+### resolveProviderCommandConfig
+
+Resolve CLI command and flags for a provider, merging default config with user overrides.
+
+```typescript
+function resolveProviderCommandConfig(
+  providerId: string
+): ResolvedProviderCommandConfig | null
+```
+
+<ResponseField name="ResolvedProviderCommandConfig" type="object">
+  <ResponseField name="provider" type="ProviderDefinition">
+    Provider metadata from registry
+  </ResponseField>
+  <ResponseField name="cli" type="string">
+    CLI binary name or path
+  </ResponseField>
+  <ResponseField name="resumeFlag" type="string">
+    Resume flag (e.g., `-c -r` for Claude)
+  </ResponseField>
+  <ResponseField name="defaultArgs" type="string[]">
+    Default arguments to always pass
+  </ResponseField>
+  <ResponseField name="autoApproveFlag" type="string">
+    Auto-approve flag (e.g., `--dangerously-skip-permissions`)
+  </ResponseField>
+  <ResponseField name="initialPromptFlag" type="string">
+    Initial prompt flag (e.g., `-i`, `-t`, or empty string for positional)
+  </ResponseField>
+  <ResponseField name="extraArgs" type="string[]">
+    User-provided extra arguments from settings
+  </ResponseField>
+  <ResponseField name="env" type="Record<string, string>">
+    Provider-specific environment variables
+  </ResponseField>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const config = resolveProviderCommandConfig('claude');
+// {
+//   provider: { id: 'claude', cli: 'claude', ... },
+//   cli: 'claude',
+//   resumeFlag: '-c -r',
+//   defaultArgs: [],
+//   autoApproveFlag: '--dangerously-skip-permissions',
+//   initialPromptFlag: '-i',
+//   extraArgs: ['--verbose'],
+//   env: { ANTHROPIC_LOG: 'debug' }
+// }
+```
+
+### buildProviderCliArgs
+
+Build CLI arguments array from provider config and runtime options.
+
+```typescript
+function buildProviderCliArgs(options: {
+  resume?: boolean;
+  resumeFlag?: string;
+  defaultArgs?: string[];
+  extraArgs?: string[];
+  autoApprove?: boolean;
+  autoApproveFlag?: string;
+  initialPrompt?: string;
+  initialPromptFlag?: string;
+  useKeystrokeInjection?: boolean;
+}): string[]
+```
+
+**Argument order:**
+
+1. Resume flag (if `resume` and `resumeFlag` provided)
+2. Default args
+3. Auto-approve flag (if `autoApprove` and `autoApproveFlag` provided)
+4. Initial prompt flag + prompt (if not using keystroke injection)
+5. Extra args
+
+**Example:**
+
+```typescript
+const args = buildProviderCliArgs({
+  resume: true,
+  resumeFlag: '-c -r',
+  defaultArgs: [],
+  autoApprove: true,
+  autoApproveFlag: '--dangerously-skip-permissions',
+  initialPrompt: 'Fix the bug',
+  initialPromptFlag: '-i',
+  extraArgs: ['--verbose'],
+  useKeystrokeInjection: false,
+});
+
+// Result: ['-c', '-r', '--dangerously-skip-permissions', '-i', 'Fix the bug', '--verbose']
+```
+
+## Tmux Integration
+
+Wrap PTY sessions in tmux for persistence (Linux/macOS only).
+
+### getTmuxSessionName
+
+Generate a deterministic tmux session name from PTY ID.
+
+```typescript
+function getTmuxSessionName(ptyId: string): string
+```
+
+**Format:**
+
+```
+emdash-{ptyId}
+```
+
+**Example:**
+
+```typescript
+getTmuxSessionName('claude-main-task_abc');
+// "emdash-claude-main-task_abc"
+```
+
+### killTmuxSession
+
+Kill a tmux session by PTY ID (fire-and-forget, ignores errors).
+
+```typescript
+function killTmuxSession(ptyId: string): void
+```
+
+**Example:**
+
+```typescript
+killTmuxSession('claude-main-task_abc');
+// Runs: tmux kill-session -t emdash-claude-main-task_abc
+```
+
+### Tmux spawn
+
+When `tmux: true` is passed to `startPty`:
+
+```bash
+tmux new-session -As {sessionName} -- {shell} {args...}
+```
+
+The `-As` flag creates or attaches to an existing session.
+
+## PTY Management
+
+### writePty
+
+Write data to a PTY (send keystrokes to agent).
+
+```typescript
+function writePty(id: string, data: string): void
+```
+
+**Example:**
+
+```typescript
+writePty('claude-main-task_abc', 'npm install\r');
+```
+
+### resizePty
+
+Resize a PTY (update terminal dimensions).
+
+```typescript
+function resizePty(id: string, cols: number, rows: number): void
+```
+
+**Example:**
+
+```typescript
+resizePty('claude-main-task_abc', 120, 32);
+```
+
+### killPty
+
+Kill a PTY process and remove its record.
+
+```typescript
+function killPty(id: string): void
+```
+
+**Example:**
+
+```typescript
+killPty('claude-main-task_abc');
+```
+
+### hasPty
+
+Check if a PTY exists.
+
+```typescript
+function hasPty(id: string): boolean
+```
+
+### getPty
+
+Get the raw `IPty` instance.
+
+```typescript
+function getPty(id: string): IPty | undefined
+```
+
+### getPtyKind
+
+Get PTY kind (`local` or `ssh`).
+
+```typescript
+function getPtyKind(id: string): 'local' | 'ssh' | undefined
+```
+
+### getPtyTmuxSessionName
+
+Get tmux session name if PTY is wrapped in tmux.
+
+```typescript
+function getPtyTmuxSessionName(id: string): string | undefined
+```
+
+## Utility Functions
+
+### parseShellArgs
+
+Parse a shell-style argument string into an array.
+
+```typescript
+function parseShellArgs(input: string): string[]
+```
+
+**Handles:**
+
+- Single quotes (literal, no escapes)
+- Double quotes (allows `\"` escapes)
+- Backslash escapes (POSIX-style, except inside single quotes)
+- Windows path preservation (e.g., `C:\Program Files` with backslashes)
+
+**Example:**
+
+```typescript
+parseShellArgs('--flag1 --message "hello world" --path "/my dir/file"');
+// ['--flag1', '--message', 'hello world', '--path', '/my dir/file']
+```
+
+### setOnDirectCliExit
+
+Register a callback for direct CLI exit (to spawn shell afterward).
+
+```typescript
+function setOnDirectCliExit(callback: (id: string, cwd: string) => void): void
+```
+
+**Used by:** `ptyIpc.ts` to spawn a shell when `startDirectPty` agent exits.
+
+## Location
+
+**Source:** `src/main/services/ptyManager.ts`
+
+**Singleton exports:**
+
+```typescript
+export async function startPty(...): Promise<IPty>
+export function startDirectPty(...): IPty | null
+export function startSshPty(...): IPty
+export function writePty(id: string, data: string): void
+export function resizePty(id: string, cols: number, rows: number): void
+export function killPty(id: string): void
+export function hasPty(id: string): boolean
+export function getPty(id: string): IPty | undefined
+export function getPtyKind(id: string): 'local' | 'ssh' | undefined
+export function getPtyTmuxSessionName(id: string): string | undefined
+```
+
+## Related Services
+
+- **ProviderRegistry** (`src/shared/providers/registry.ts`): Defines all 21 CLI agents
+- **AgentEventService** (`src/main/services/AgentEventService.ts`): Agent callback hooks
+- **ProviderStatusCache** (`src/main/services/providerStatusCache.ts`): CLI path cache
+
+## See Also
+
+- [Provider Registry](/features/providers) - All 21 CLI agent definitions
+- [Agent Event Service](/api/main-process) - CLI hook system
+- [Task Lifecycle Service](/api/main-process) - PTY orchestration

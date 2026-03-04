@@ -1,0 +1,427 @@
+---
+title: Testing
+description: Testing framework, patterns, and best practices for Emdash
+---
+
+## Test Framework
+
+Emdash uses **Vitest** for all tests, configured in `vite.config.ts` with `environment: 'node'`.
+
+### Test Locations
+
+Tests are organized by process type:
+
+```
+src/test/
+├── main/                  # Main process tests (15+ service tests)
+│   ├── WorktreeService.test.ts
+│   ├── DatabaseService.test.ts
+│   ├── ptyManager.test.ts
+│   └── ...
+├── renderer/              # Renderer tests (UI, hooks)
+│   ├── useProjectManagement.test.ts
+│   ├── TaskTerminalPanel.test.ts
+│   └── ...
+└── main/utils/__tests__/  # Utility tests
+    └── ...
+```
+
+## Running Tests
+
+### Run All Tests
+
+```bash
+pnpm exec vitest run
+```
+
+This runs the full test suite once and exits.
+
+### Run Specific Test File
+
+```bash
+pnpm exec vitest run src/test/main/WorktreeService.test.ts
+```
+
+### Watch Mode
+
+```bash
+pnpm exec vitest
+```
+
+Runs tests in watch mode, re-running on file changes.
+
+### Run Tests with Coverage
+
+```bash
+pnpm exec vitest run --coverage
+```
+
+## Test Structure
+
+Emdash tests follow a per-file mocking pattern. There's **no shared test setup file** — each test file declares its own mocks.
+
+### Basic Test Example
+
+```typescript
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// Mock electron before importing anything that depends on it
+vi.mock('electron', () => ({
+  app: {
+    getPath: vi.fn().mockReturnValue('/tmp/test'),
+    getName: vi.fn().mockReturnValue('emdash-test'),
+  },
+}));
+
+// Mock DatabaseService
+vi.mock('../../main/services/DatabaseService', () => ({
+  databaseService: {
+    getDatabase: vi.fn(),
+  },
+}));
+
+// Mock logger
+vi.mock('../../main/lib/logger', () => ({
+  log: {
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
+describe('MyService', () => {
+  it('should do something', () => {
+    expect(true).toBe(true);
+  });
+});
+```
+
+## Common Mocking Patterns
+
+### Mocking Electron
+
+```typescript
+vi.mock('electron', () => ({
+  app: {
+    getPath: vi.fn().mockReturnValue(os.tmpdir()),
+    getName: vi.fn().mockReturnValue('emdash-test'),
+    getVersion: vi.fn().mockReturnValue('0.0.0-test'),
+  },
+  ipcMain: {
+    handle: vi.fn(),
+    on: vi.fn(),
+  },
+}));
+```
+
+### Mocking DatabaseService
+
+```typescript
+vi.mock('../../main/services/DatabaseService', () => ({
+  databaseService: {
+    getDatabase: vi.fn(),
+    getAllProjects: vi.fn().mockResolvedValue([]),
+    createTask: vi.fn().mockResolvedValue({ id: 'test-id' }),
+  },
+}));
+```
+
+### Mocking Logger
+
+```typescript
+vi.mock('../../main/lib/logger', () => ({
+  log: {
+    info: vi.fn(),
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+```
+
+### Mocking File System Operations
+
+```typescript
+import fs from 'fs';
+import { vi } from 'vitest';
+
+vi.mock('fs', () => ({
+  existsSync: vi.fn().mockReturnValue(true),
+  readFileSync: vi.fn().mockReturnValue('file contents'),
+  writeFileSync: vi.fn(),
+}));
+```
+
+## Integration Tests
+
+Integration tests create real Git repositories in temporary directories:
+
+```typescript
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { execSync } from 'child_process';
+
+describe('WorktreeService integration', () => {
+  let tempDir: string;
+  let repoPath: string;
+
+  beforeEach(() => {
+    // Create temp directory
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'emdash-test-'));
+    repoPath = path.join(tempDir, 'repo');
+    
+    // Initialize Git repo
+    fs.mkdirSync(repoPath);
+    execSync('git init', { cwd: repoPath });
+    execSync('git config user.email "test@example.com"', { cwd: repoPath });
+    execSync('git config user.name "Test User"', { cwd: repoPath });
+    
+    // Create initial commit
+    fs.writeFileSync(path.join(repoPath, 'README.md'), '# Test');
+    execSync('git add .', { cwd: repoPath });
+    execSync('git commit -m "Initial commit"', { cwd: repoPath });
+  });
+
+  afterEach(() => {
+    // Clean up temp directory
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('creates a worktree', async () => {
+    // Test implementation
+  });
+});
+```
+
+<Warning>
+Integration tests use `os.tmpdir()` for temporary repos. Never create test files in the actual project directory.
+</Warning>
+
+## Testing Best Practices
+
+### Always Mock External Dependencies
+
+```typescript
+// Good: Mock electron, database, logger
+vi.mock('electron', () => ({ /* ... */ }));
+vi.mock('../../main/services/DatabaseService', () => ({ /* ... */ }));
+vi.mock('../../main/lib/logger', () => ({ /* ... */ }));
+```
+
+### Use Descriptive Test Names
+
+```typescript
+// Good
+it('creates a worktree with the correct branch prefix', async () => {
+  // ...
+});
+
+// Bad
+it('test worktree', async () => {
+  // ...
+});
+```
+
+### Test Error Cases
+
+```typescript
+it('throws when project path does not exist', async () => {
+  await expect(
+    service.createWorktree('/nonexistent/path', 'task-name')
+  ).rejects.toThrow('Project path does not exist');
+});
+```
+
+### Clean Up Resources
+
+```typescript
+afterEach(async () => {
+  // Close database connections
+  await db.close();
+  
+  // Remove temp files
+  fs.rmSync(tempDir, { recursive: true, force: true });
+  
+  // Kill PTY processes
+  ptyManager.removeAllPtys();
+});
+```
+
+## Vitest Configuration
+
+From `vite.config.ts`:
+
+```typescript
+export default defineConfig({
+  test: {
+    dir: '.',
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
+  },
+});
+```
+
+### Key Settings
+
+- **`environment: 'node'`**: Tests run in Node.js environment (not jsdom)
+- **`include: ['src/**/*.test.ts']`**: Only files matching `*.test.ts` are tested
+- **Test files must be in `src/` directory**
+
+## Database Testing
+
+### Schema Contract Tests
+
+Tests that verify database schema structure:
+
+```typescript
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { DatabaseService } from '../../main/services/DatabaseService';
+
+vi.mock('../../main/db/path', () => ({
+  resolveDatabasePath: () => '/tmp/emdash-test.db',
+  resolveMigrationsPath: () => '/tmp/drizzle',
+}));
+
+describe('DatabaseService schema contract', () => {
+  let service: DatabaseService;
+
+  beforeEach(() => {
+    service = new DatabaseService();
+  });
+
+  it('validates all required schema invariants', async () => {
+    vi.spyOn(service as any, 'tableExists').mockResolvedValue(true);
+    vi.spyOn(service as any, 'tableHasColumn')
+      .mockResolvedValue(true);
+
+    await expect(
+      (service as any).validateSchemaContract()
+    ).resolves.toBeUndefined();
+  });
+
+  it('throws when required column is missing', async () => {
+    vi.spyOn(service as any, 'tableExists').mockResolvedValue(true);
+    vi.spyOn(service as any, 'tableHasColumn')
+      .mockResolvedValue(false);
+
+    await expect(
+      (service as any).validateSchemaContract()
+    ).rejects.toMatchObject({
+      name: 'DatabaseSchemaMismatchError',
+      code: 'DB_SCHEMA_MISMATCH',
+    });
+  });
+});
+```
+
+## PTY Testing
+
+Tests for PTY (pseudo-terminal) management:
+
+```typescript
+describe('ptyManager', () => {
+  beforeEach(() => {
+    process.env.EMDASH_DISABLE_PTY = '1'; // Disable actual PTY creation
+  });
+
+  afterEach(() => {
+    delete process.env.EMDASH_DISABLE_PTY;
+  });
+
+  it('tracks PTY lifecycle', () => {
+    const ptyId = 'test-pty-id';
+    
+    // Mock PTY creation
+    const mockPty = {
+      pid: 1234,
+      write: vi.fn(),
+      kill: vi.fn(),
+      on: vi.fn(),
+    };
+    
+    // Test PTY operations
+    ptyManager.addPty(ptyId, mockPty);
+    expect(ptyManager.getPty(ptyId)).toBe(mockPty);
+    
+    ptyManager.removePty(ptyId);
+    expect(ptyManager.getPty(ptyId)).toBeUndefined();
+  });
+});
+```
+
+## Pre-Commit Testing
+
+Before committing, always run the quality checks:
+
+```bash
+pnpm run format       # Format with Prettier
+pnpm run lint         # ESLint
+pnpm run type-check   # TypeScript
+pnpm exec vitest run  # Tests
+```
+
+<Tip>
+These checks run automatically in CI. Running them locally catches issues early.
+</Tip>
+
+## CI Testing
+
+Tests run automatically in GitHub Actions on every PR via `.github/workflows/code-consistency-check.yml`:
+
+1. Format check (`prettier --check`)
+2. Type check (`tsc --noEmit`)
+3. Lint check (`eslint`)
+4. Test suite (`vitest run`)
+
+All checks must pass before merging.
+
+## Writing New Tests
+
+<Steps>
+  <Step title="Create test file">
+    Place test files next to the code they test:
+    - Main process: `src/test/main/ServiceName.test.ts`
+    - Renderer: `src/test/renderer/ComponentName.test.ts`
+  </Step>
+
+  <Step title="Set up mocks">
+    Mock all external dependencies at the top of the file:
+    ```typescript
+    vi.mock('electron', () => ({ /* ... */ }));
+    vi.mock('../../main/services/DatabaseService', () => ({ /* ... */ }));
+    vi.mock('../../main/lib/logger', () => ({ /* ... */ }));
+    ```
+  </Step>
+
+  <Step title="Write tests">
+    Use `describe` blocks to group related tests:
+    ```typescript
+    describe('MyService', () => {
+      describe('methodName', () => {
+        it('should handle success case', () => { /* ... */ });
+        it('should handle error case', () => { /* ... */ });
+      });
+    });
+    ```
+  </Step>
+
+  <Step title="Run tests">
+    ```bash
+    pnpm exec vitest run src/test/main/MyService.test.ts
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Development Setup" icon="laptop-code" href="/api/development-setup">
+    Set up your development environment
+  </Card>
+  <Card title="Contributing" icon="code-pull-request" href="/api/contributing">
+    Learn the contribution workflow
+  </Card>
+</CardGroup>

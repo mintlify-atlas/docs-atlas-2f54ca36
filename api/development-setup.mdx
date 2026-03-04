@@ -1,0 +1,240 @@
+---
+title: Development setup
+description: Set up your local environment to contribute to Emdash
+---
+
+## Prerequisites
+
+Before you begin, ensure you have the following installed:
+
+- **Node.js**: Version 20.0.0 or higher (recommended: 22.20.0)
+- **pnpm**: Package manager version 10.28.0 or higher
+- **Git**: For version control
+
+Optional but recommended for end-to-end testing:
+- **GitHub CLI** (`gh`): Install via `brew install gh`, then run `gh auth login`
+- **At least one coding agent CLI**: Such as Claude, Codex, OpenCode, etc.
+
+## Quick Start
+
+The fastest way to get Emdash running locally:
+
+<Steps>
+  <Step title="Install the correct Node.js version">
+    If you're using nvm:
+    ```bash
+    nvm use
+    ```
+    This reads the `.nvmrc` file and installs Node.js 22.20.0 if needed.
+    
+    Or install Node.js 22.x manually from [nodejs.org](https://nodejs.org).
+  </Step>
+
+  <Step title="Install dependencies and start the dev server">
+    ```bash
+    pnpm run d
+    ```
+    This command:
+    - Installs all dependencies via `pnpm install`
+    - Launches both the Electron main process and Vite dev server
+    - Opens the Emdash application window
+  </Step>
+
+  <Step title="If startup fails">
+    If `pnpm run d` fails mid-stream:
+    ```bash
+    pnpm install
+    pnpm run dev
+    ```
+  </Step>
+</Steps>
+
+## Development Commands
+
+Once you're set up, use these commands during development:
+
+### Starting the Dev Server
+
+```bash
+# Quick start (installs deps + starts dev)
+pnpm run d
+
+# Development mode (runs main + renderer concurrently)
+pnpm run dev
+
+# Run processes separately
+pnpm run dev:main      # Electron main process only (tsc + electron)
+pnpm run dev:renderer  # Vite dev server only (port 3000)
+```
+
+### Quality Checks
+
+**Always run these before committing:**
+
+```bash
+pnpm run format       # Format with Prettier
+pnpm run lint         # ESLint
+pnpm run type-check   # TypeScript type checking
+pnpm exec vitest run  # Run all tests
+```
+
+<Tip>
+Pre-commit hooks run automatically via Husky + lint-staged. On each commit, staged files are auto-formatted with Prettier and linted with ESLint. Type checking and tests run in CI.
+</Tip>
+
+### Native Modules
+
+Emdash uses native Node.js modules (node-pty, sqlite3, keytar) that must be rebuilt for Electron:
+
+```bash
+pnpm run rebuild  # Rebuild native modules for Electron
+pnpm run reset    # Clean install (removes node_modules, reinstalls)
+```
+
+Run `pnpm run rebuild` after:
+- Updating native dependencies
+- Switching Node.js versions
+- Encountering native module errors
+
+### Building
+
+```bash
+# Build main + renderer for production
+pnpm run build
+
+# Package for specific platforms
+pnpm run package:mac    # macOS .dmg (arm64)
+pnpm run package:linux  # Linux AppImage/deb (x64)
+pnpm run package:win    # Windows nsis/portable (x64)
+```
+
+## Development Workflow
+
+### Hot Reload Behavior
+
+- **Renderer changes** (files in `src/renderer/`): Hot-reload automatically via Vite
+- **Main process changes** (files in `src/main/`): Require Electron restart (Ctrl+C → `pnpm run dev`)
+- **Native module updates**: Require `pnpm run rebuild`
+
+### Port Configuration
+
+The Vite dev server runs on port 3000 by default. This is configured in `vite.config.ts`.
+
+### Environment Variables
+
+All environment variables are optional. Create a `.env` file in the project root to configure:
+
+```bash
+# Database
+EMDASH_DB_FILE=/custom/path/emdash.db  # Override database location
+EMDASH_DISABLE_NATIVE_DB=1             # Use better-sqlite3 instead
+
+# Features
+EMDASH_DISABLE_CLONE_CACHE=1           # Disable clone caching
+EMDASH_DISABLE_PTY=1                   # Disable PTY (used in tests)
+
+# Telemetry
+TELEMETRY_ENABLED=0                    # Disable anonymous telemetry
+
+# Agent-specific
+CODEX_SANDBOX_MODE=1                   # Codex agent sandbox mode
+CODEX_APPROVAL_POLICY=auto             # Codex approval policy
+```
+
+## Project Structure
+
+Understanding the codebase layout:
+
+```
+emdash/
+├── src/
+│   ├── main/          # Electron main process
+│   │   ├── services/  # Core services (Git, PTY, Database)
+│   │   ├── ipc/       # IPC handlers
+│   │   └── db/        # Database schema and migrations
+│   ├── renderer/      # React UI (Vite)
+│   │   ├── components/
+│   │   └── hooks/
+│   ├── shared/        # Shared between main and renderer
+│   └── test/          # Test files
+├── drizzle/           # Database migrations (auto-generated)
+├── dist/              # Compiled output (gitignored)
+└── release/           # Packaged apps (gitignored)
+```
+
+### Path Aliases
+
+<Warning>
+The `@/*` alias resolves differently in main vs renderer processes:
+
+- **Renderer** (`tsconfig.json`): `@/*` → `src/renderer/*`
+- **Main** (`tsconfig.main.json`): `@/*` → `src/*`
+- **Shared** (both): `@shared/*` → `src/shared/*`
+</Warning>
+
+## TypeScript Configuration
+
+Emdash uses two TypeScript configs:
+
+- **`tsconfig.json`**: Renderer + shared code (`module: ESNext`, `noEmit: true`)
+- **`tsconfig.main.json`**: Main process (`module: CommonJS` — required by Electron)
+
+Both configs have `strict: true` enabled. Prefer explicit types over `any`.
+
+## Common Development Issues
+
+<AccordionGroup>
+  <Accordion title="Native module errors after npm install">
+    Run `pnpm run rebuild` to rebuild native modules (node-pty, sqlite3, keytar) for your current Electron version.
+    
+    If issues persist, try a clean install:
+    ```bash
+    pnpm run reset
+    ```
+  </Accordion>
+
+  <Accordion title="Electron app won't start">
+    Check that:
+    - You're using Node.js 20.0.0 or higher (run `node --version`)
+    - All dependencies are installed (`pnpm install`)
+    - The main process compiled successfully (check for TypeScript errors)
+    
+    Try:
+    ```bash
+    pnpm run build:main
+    pnpm run dev
+    ```
+  </Accordion>
+
+  <Accordion title="Changes not reflecting in the app">
+    - **Renderer changes**: Should hot-reload automatically. Refresh with Cmd+R (Mac) or Ctrl+R (Windows/Linux)
+    - **Main process changes**: Require full restart (Ctrl+C → `pnpm run dev`)
+    - **Native modules**: Require rebuild (`pnpm run rebuild`)
+  </Accordion>
+
+  <Accordion title="Database schema errors">
+    Never manually edit files in `drizzle/meta/` or migration files. Instead:
+    
+    1. Edit `src/main/db/schema.ts`
+    2. Generate migration: `pnpm exec drizzle-kit generate`
+    3. Test locally before committing
+    
+    To reset your local database:
+    ```bash
+    # Quit the app first, then:
+    rm ~/Library/Application\ Support/emdash/emdash.db  # macOS
+    rm ~/.config/emdash/emdash.db                        # Linux
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Testing" icon="flask" href="/api/testing">
+    Learn how to write and run tests
+  </Card>
+  <Card title="Contributing" icon="code-pull-request" href="/api/contributing">
+    Submit your first PR
+  </Card>
+</CardGroup>

@@ -1,0 +1,228 @@
+---
+title: Application settings
+description: Configure Emdash application behavior through the settings UI
+---
+
+Emdash stores application settings in `settings.json` located in your user data directory:
+
+- **macOS**: `~/Library/Application Support/emdash/settings.json`
+- **Linux**: `~/.config/emdash/settings.json`
+- **Windows**: `%APPDATA%\emdash\settings.json`
+
+Settings can be modified through the UI (accessible via **Cmd/Ctrl + ,**) or by directly editing the JSON file.
+
+## Repository settings
+
+Controls Git worktree and branch behavior for tasks.
+
+<ParamField path="repository.branchPrefix" type="string" default="emdash">
+  Prefix for task branches. When creating a task, Emdash creates a branch named `{prefix}/{task-name}-{hash}`.
+  
+  ```json
+  "repository": {
+    "branchPrefix": "emdash"
+  }
+  ```
+</ParamField>
+
+<ParamField path="repository.pushOnCreate" type="boolean" default={true}>
+  Automatically push task branches to remote on creation. When enabled, Emdash runs `git push --set-upstream origin {branch}` after creating the worktree.
+  
+  ```json
+  "repository": {
+    "pushOnCreate": true
+  }
+  ```
+</ParamField>
+
+## Project settings
+
+<ParamField path="projectPrep.autoInstallOnOpenInEditor" type="boolean" default={true}>
+  Automatically install dependencies when opening a project in an external editor. When enabled, Emdash runs the appropriate package manager install command (e.g., `npm install`, `pnpm install`) before opening.
+</ParamField>
+
+<ParamField path="projects.defaultDirectory" type="string" default="~/emdash-projects">
+  Default directory for new projects when cloning repositories.
+  
+  ```json
+  "projects": {
+    "defaultDirectory": "/Users/yourname/projects"
+  }
+  ```
+  
+  <Note>Tilde (`~`) is expanded to your home directory.</Note>
+</ParamField>
+
+## Task settings
+
+Control default task creation and execution behavior.
+
+<ParamField path="tasks.autoGenerateName" type="boolean" default={true}>
+  Automatically generate task names from the initial prompt. When enabled, Emdash uses the first few words of your prompt as the task name.
+</ParamField>
+
+<ParamField path="tasks.autoApproveByDefault" type="boolean" default={false}>
+  Enable auto-approve mode by default for new tasks. When enabled, agents can execute commands without confirmation.
+  
+  <Warning>Auto-approve mode allows agents to run commands without user confirmation. Only enable this if you trust the agent and understand the security implications.</Warning>
+</ParamField>
+
+<ParamField path="tasks.autoTrustWorktrees" type="boolean" default={true}>
+  Automatically trust worktrees in VSCode's workspace trust model. Prevents VSCode from showing the workspace trust dialog when opening task worktrees.
+</ParamField>
+
+## Agent provider settings
+
+<ParamField path="defaultProvider" type="string" default="claude">
+  Default CLI agent to use for new tasks. Must be one of the supported provider IDs: `claude`, `codex`, `opencode`, `amp`, etc.
+  
+  ```json
+  "defaultProvider": "claude"
+  ```
+</ParamField>
+
+<ParamField path="providerConfigs" type="object" default={{}}>
+  Custom configuration for CLI providers. Allows overriding default CLI paths, flags, and environment variables.
+  
+  ```json
+  "providerConfigs": {
+    "claude": {
+      "cli": "/usr/local/bin/claude",
+      "extraArgs": "--model claude-opus-4",
+      "env": {
+        "ANTHROPIC_API_KEY": "sk-..."
+      }
+    }
+  }
+  ```
+  
+  Each provider config supports:
+  - `cli` - Custom CLI binary path
+  - `resumeFlag` - Override resume flag
+  - `defaultArgs` - Override default arguments
+  - `autoApproveFlag` - Override auto-approve flag
+  - `initialPromptFlag` - Override initial prompt flag
+  - `extraArgs` - Additional CLI arguments
+  - `env` - Custom environment variables
+</ParamField>
+
+## Interface settings
+
+<ParamField path="interface.theme" type="string" default="system">
+  Application theme. Options: `light`, `dark`, `dark-black`, `system`.
+  
+  ```json
+  "interface": {
+    "theme": "dark"
+  }
+  ```
+</ParamField>
+
+<ParamField path="interface.autoRightSidebarBehavior" type="boolean" default={false}>
+  Automatically show/hide the right sidebar based on context. When enabled, the sidebar opens automatically when relevant content is available.
+</ParamField>
+
+<ParamField path="interface.taskHoverAction" type="string" default="delete">
+  Action shown when hovering over tasks. Options: `delete`, `archive`.
+</ParamField>
+
+## Keyboard shortcuts
+
+Customize keyboard shortcuts through the `keyboard` settings object. Each shortcut has a `key` and `modifier`.
+
+```json
+"keyboard": {
+  "commandPalette": { "key": "k", "modifier": "cmd" },
+  "settings": { "key": ",", "modifier": "cmd" },
+  "toggleLeftSidebar": { "key": "b", "modifier": "cmd" },
+  "toggleRightSidebar": { "key": ".", "modifier": "cmd" },
+  "toggleTheme": { "key": "t", "modifier": "cmd" },
+  "toggleKanban": { "key": "p", "modifier": "cmd" },
+  "toggleEditor": { "key": "e", "modifier": "cmd" },
+  "nextProject": { "key": "]", "modifier": "cmd" },
+  "prevProject": { "key": "[", "modifier": "cmd" },
+  "newTask": { "key": "n", "modifier": "cmd" },
+  "nextAgent": { "key": "k", "modifier": "cmd+shift" },
+  "prevAgent": { "key": "j", "modifier": "cmd+shift" }
+}
+```
+
+<Note>
+**Modifier values**: `cmd`, `ctrl`, `shift`, `alt`, `option`, `cmd+shift`, `ctrl+shift`
+
+On macOS, use `cmd`. On Windows/Linux, use `ctrl`.
+</Note>
+
+## Terminal settings
+
+<ParamField path="terminal.fontFamily" type="string" default="">
+  Custom font family for terminal display. Leave empty to use system default monospace font.
+  
+  ```json
+  "terminal": {
+    "fontFamily": "JetBrains Mono"
+  }
+  ```
+</ParamField>
+
+<ParamField path="terminal.autoCopyOnSelection" type="boolean" default={false}>
+  Automatically copy text to clipboard when selected in terminal.
+</ParamField>
+
+## Browser preview settings
+
+<ParamField path="browserPreview.enabled" type="boolean" default={true}>
+  Enable the built-in browser preview pane for web development projects.
+</ParamField>
+
+<ParamField path="browserPreview.engine" type="string" default="chromium">
+  Browser engine for preview. Currently only `chromium` is supported.
+</ParamField>
+
+## Notification settings
+
+<ParamField path="notifications.enabled" type="boolean" default={true}>
+  Enable in-app notifications.
+</ParamField>
+
+<ParamField path="notifications.sound" type="boolean" default={true}>
+  Play notification sounds.
+</ParamField>
+
+<ParamField path="notifications.osNotifications" type="boolean" default={true}>
+  Show OS-level notifications (system tray notifications).
+</ParamField>
+
+<ParamField path="notifications.soundFocusMode" type="string" default="always">
+  When to play notification sounds. Options: `always`, `unfocused` (only when app is not focused).
+</ParamField>
+
+## MCP (Model Context Protocol) settings
+
+<ParamField path="mcp.context7.enabled" type="boolean" default={false}>
+  Enable Context7 MCP server integration for enhanced context awareness.
+</ParamField>
+
+## Open In App settings
+
+<ParamField path="defaultOpenInApp" type="string" default="terminal">
+  Default action for the "Open In" button. Options include: `terminal`, `vscode`, `cursor`, `windsurf`, etc.
+</ParamField>
+
+<ParamField path="hiddenOpenInApps" type="array" default={[]}>
+  List of "Open In" apps to hide from the UI menu.
+  
+  ```json
+  "hiddenOpenInApps": ["terminal", "finder"]
+  ```
+</ParamField>
+
+## Accessing settings UI
+
+To open the settings interface:
+
+1. Press **Cmd/Ctrl + ,**
+2. Or click the settings icon in the top navigation
+3. Or use the command palette (**Cmd/Ctrl + K**) and search for "Settings"
+
+Changes are saved automatically and take effect immediately (some settings may require app restart).

@@ -1,0 +1,236 @@
+---
+title: Architecture overview
+description: Understanding Emdash's Electron architecture, boot sequence, and module system
+---
+
+## Process architecture
+
+Emdash is built on **Electron 30.5.1**, which provides a multi-process architecture that combines Chromium and Node.js:
+
+- **Main process** (`src/main/`): The Node.js backend that manages the application lifecycle, native OS integration, IPC handlers, database operations, PTY management, and all system-level services
+- **Renderer process** (`src/renderer/`): The Chromium-based UI layer running React 18 with TypeScript, built using Vite. Handles all user interface, terminal panes, and file visualization
+- **Shared code** (`src/shared/`): Common utilities, types, and definitions used by both processes, including the provider registry with 21 agent definitions
+
+### Why this architecture?
+
+The main/renderer split provides critical security and stability benefits:
+
+- **Security**: Renderer runs in a sandboxed environment with no direct filesystem or system access. All privileged operations go through the main process via IPC
+- **Stability**: UI crashes don't affect backend operations. PTY sessions and database transactions continue running even if the renderer crashes
+- **Performance**: CPU-intensive operations (git, file operations) run in the main process without blocking the UI thread
+
+## Boot sequence
+
+The application bootstraps through three key files:
+
+### 1. entry.ts
+
+`src/main/entry.ts` is the very first file executed. It performs critical runtime setup:
+
+```typescript
+// Set app name BEFORE any module accesses app.getPath('userData')
+const { app } = require('electron');
+app.setName('Emdash');
+```
+
+This must happen before Electron reads `userData` path, otherwise it defaults to `~/Library/Application Support/Electron` instead of `~/Library/Application Support/emdash`.
+
+**Path alias monkey-patch**: Since the main process compiles to CommonJS, TypeScript path aliases don't work at runtime. `entry.ts` patches `Module._resolveFilename` to resolve aliases dynamically:
+
+```typescript
+const base = path.join(__dirname, '..'); // dist/main
+const sharedBase = path.join(base, 'shared');
+const mainBase = path.join(base, 'main');
+
+Module._resolveFilename = function (request, parent, isMain, options) {
+  if (request.startsWith('@shared/')) {
+    const mapped = path.join(sharedBase, request.slice('@shared/'.length));
+    return orig.call(this, mapped, parent, isMain, options);
+  }
+  if (request.startsWith('@/')) {
+    const mapped = path.join(mainBase, request.slice('@/'.length));
+    return orig.call(this, mapped, parent, isMain, options);
+  }
+  return orig.call(this, request, parent, isMain, options);
+};
+```
+
+### 2. main.ts
+
+After `entry.ts` loads, `src/main/main.ts` performs application initialization:
+
+**Environment loading**:
+```typescript
+const envPath = path.join(__dirname, '..', '..', '.env');
+require('dotenv').config({ path: envPath });
+```
+
+**PATH augmentation**: Critical for GUI-launched apps on macOS/Linux that don't inherit shell PATH:
+
+```typescript
+// macOS: Add Homebrew, npm global, nvm paths
+const extras = ['/opt/homebrew/bin', '/usr/local/bin', '/opt/homebrew/sbin'];
+const cur = process.env.PATH || '';
+const parts = cur.split(':').filter(Boolean);
+for (const p of extras) {
+  if (!parts.includes(p)) parts.unshift(p);
+}
+process.env.PATH = parts.join(':');
+
+// Also read from login shell to capture nvm/custom paths
+const shell = process.env.SHELL || '/bin/zsh';
+const loginPath = execSync(`${shell} -ilc 'echo -n $PATH'`, { encoding: 'utf8' });
+```
+
+This ensures CLI tools like `gh`, `codex`, `claude` are found when agents spawn.
+
+**App.whenReady() sequence**:
+
+```typescript
+app.whenReady().then(async () => {
+  await databaseService.initialize();        // 1. Init SQLite
+  await telemetry.init();                     // 2. Start telemetry
+  await agentEventService.start();            // 3. Start HTTP server for agent hooks
+  registerAllIpc();                           // 4. Register IPC handlers
+  worktreePoolService.cleanupOrphanedReserves(); // 5. Cleanup old worktrees
+  await connectionsService.initProviderStatusCache(); // 6. Detect installed agents
+  setupApplicationMenu();                     // 7. Setup native menu
+  createMainWindow();                         // 8. Create UI window
+  await autoUpdateService.initialize();       // 9. Check for updates
+});
+```
+
+### 3. preload.ts
+
+`src/main/preload.ts` exposes a secure bridge between main and renderer:
+
+```typescript
+contextBridge.exposeInMainWorld('electronAPI', {
+  // PTY operations
+  ptyStart: (opts) => ipcRenderer.invoke('pty:start', opts),
+  ptyInput: (args) => ipcRenderer.send('pty:input', args),
+  onPtyData: (id, listener) => {
+    const subscription = (event, data) => listener(data);
+    ipcRenderer.on(`pty:data:${id}`, subscription);
+    return () => ipcRenderer.removeListener(`pty:data:${id}`, subscription);
+  },
+  // ... 200+ more methods
+});
+```
+
+The renderer accesses these via `window.electronAPI` with full TypeScript safety.
+
+## Path aliases
+
+**Critical**: `@/*` resolves differently in main vs renderer:
+
+| Alias | Renderer (tsconfig.json) | Main (tsconfig.main.json) |
+|-------|-------------------------|---------------------------|
+| `@/*` | `src/renderer/*` | `src/*` (resolves to `src/main/*`) |
+| `@shared/*` | `src/shared/*` | `src/shared/*` |
+| `#types/*` | `src/types/*` | _(not available)_ |
+| `#types` | `src/types/index.ts` | _(not available)_ |
+
+**At build time**:
+- Renderer: Vite resolves aliases during bundling (ESNext modules)
+- Main: TypeScript resolves during compilation, but only for type checking. At runtime, `entry.ts` handles resolution
+
+**Example**:
+```typescript
+// In src/main/services/WorktreeService.ts
+import { PROVIDERS } from '@shared/providers/registry'; // OK
+import { log } from '@/lib/logger'; // Resolves to src/main/lib/logger
+
+// In src/renderer/components/App.tsx
+import { useTaskManagement } from '@/hooks/useTaskManagement'; // Resolves to src/renderer/hooks/
+import { PROVIDERS } from '@shared/providers/registry'; // OK
+```
+
+## Module system
+
+**Main process**: Uses CommonJS (`module: "CommonJS"` in `tsconfig.main.json`)
+- Required by Electron's Node.js runtime
+- Compiled TypeScript outputs `.js` files with `require()` and `module.exports`
+- Native modules (`node-pty`, `sqlite3`, `keytar`) require CommonJS
+
+```typescript
+// Compiled main process code uses:
+const { app } = require('electron');
+module.exports = { worktreeService };
+```
+
+**Renderer process**: Uses ESNext modules (`module: "ESNext"` in `tsconfig.json`)
+- Vite bundles everything for the browser
+- Source uses ES6 `import`/`export`
+- Tree-shaking and code splitting enabled
+
+```typescript
+// Renderer source uses:
+import React from 'react';
+export function App() { ... }
+```
+
+## Directory structure
+
+```
+src/
+├── main/                  # Main process (Node.js backend)
+│   ├── app/              # Window, menu, lifecycle management
+│   ├── db/               # Database schema, Drizzle client
+│   ├── ipc/              # IPC handler registration (19 files)
+│   ├── lib/              # Utilities (logger, telemetry helpers)
+│   ├── services/         # Core services (110 .ts files total)
+│   │   ├── DatabaseService.ts
+│   │   ├── WorktreeService.ts
+│   │   ├── ptyManager.ts
+│   │   ├── ssh/          # SSH connection management
+│   │   ├── worktreeIpc.ts # Some IPC handlers colocated with services
+│   │   └── ...
+│   ├── utils/            # Utility functions
+│   ├── entry.ts          # First file executed (path alias setup)
+│   ├── main.ts           # Main entry point
+│   ├── preload.ts        # Context bridge (46KB, 1,400+ lines)
+│   └── settings.ts       # App settings persistence
+│
+├── renderer/             # Renderer process (React UI)
+│   ├── components/       # React components (80+ files)
+│   │   ├── App.tsx      # Root component
+│   │   ├── ChatInterface.tsx
+│   │   ├── FileExplorer/
+│   │   ├── skills/      # Skills management UI
+│   │   └── ssh/         # SSH UI components
+│   ├── contexts/         # React context providers
+│   ├── hooks/            # Custom React hooks (42 files)
+│   │   ├── useTaskManagement.ts  # Task lifecycle (~864 lines)
+│   │   ├── useAppInitialization.ts
+│   │   └── ...
+│   ├── lib/              # Renderer utilities
+│   ├── terminal/         # Terminal integration helpers
+│   ├── types/            # TypeScript definitions
+│   │   └── electron-api.d.ts  # IPC type definitions (1,870 lines)
+│   ├── views/            # Top-level views (Welcome, Workspace)
+│   ├── main.tsx          # React entry point
+│   └── index.html        # HTML shell
+│
+└── shared/               # Shared between main and renderer
+    ├── providers/
+    │   └── registry.ts   # 21 CLI agent definitions
+    ├── skills/           # Skills system types
+    ├── ptyId.ts          # PTY ID helpers
+    └── ...
+```
+
+## Key configuration files
+
+- **tsconfig.json**: Renderer/shared config (`module: ESNext`, `noEmit: true`)
+- **tsconfig.main.json**: Main process config (`module: CommonJS`)
+- **vite.config.ts**: Renderer build + Vitest test config
+- **drizzle.config.ts**: Database migration config
+- **package.json**: Build config under `"build"` key (Electron Builder)
+- **.nvmrc**: Node version lock (22.20.0)
+
+## Next steps
+
+- [Main process](/api/main-process) - Deep dive into services, PTY management, and database
+- [Renderer process](/api/renderer-process) - React architecture, hooks, and component structure
+- [IPC handlers](/api/ipc-handlers) - Communication pattern and handler reference

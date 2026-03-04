@@ -1,0 +1,429 @@
+---
+title: Diff review and file changes
+description: Review, stage, and approve changes with the built-in diff viewer before creating PRs
+---
+
+Emdash provides a built-in diff visualization UI for reviewing changes before committing or creating pull requests. The File Changes panel shows real-time diffs, supports staging, and includes a comparison view for side-by-side review.
+
+<Info>
+Diff review is a **local-only** feature. Remote projects over SSH do not yet support diff visualization.
+</Info>
+
+## File Changes panel
+
+The File Changes panel is your central hub for reviewing agent-made changes:
+
+<Steps>
+  <Step title="Access the panel">
+    Click the **File Changes** icon in the task toolbar, or use the keyboard shortcut:
+    - **macOS**: `Cmd+Shift+D`
+    - **Windows/Linux**: `Ctrl+Shift+D`
+  </Step>
+
+  <Step title="View changed files">
+    The panel shows all modified, added, and deleted files since the base branch:
+    - 🟢 **Green**: Added files
+    - 🟡 **Yellow**: Modified files
+    - 🔴 **Red**: Deleted files
+    - **+/-** counts: Insertions and deletions per file
+  </Step>
+
+  <Step title="Navigate changes">
+    - Click a file to view its diff
+    - Use arrow keys to navigate between files
+    - Filter by file path or change type
+  </Step>
+</Steps>
+
+### Panel layout
+
+From `FileChangesPanel.tsx` (exact file structure):
+
+```tsx
+<div className="file-changes-panel">
+  <header>
+    <h2>File Changes</h2>
+    <div className="stats">
+      {totalFiles} files, +{insertions} -{deletions}
+    </div>
+  </header>
+
+  <div className="file-list">
+    {files.map((file) => (
+      <FileChangeItem
+        key={file.path}
+        path={file.path}
+        status={file.status}
+        insertions={file.insertions}
+        deletions={file.deletions}
+        onClick={() => openDiff(file)}
+      />
+    ))}
+  </div>
+
+  <footer>
+    <button onClick={stageAll}>Stage All</button>
+    <button onClick={commitChanges}>Commit</button>
+    <button onClick={createPR}>Create PR</button>
+  </footer>
+</div>
+```
+
+## Diff visualization
+
+Clicking a file opens the diff viewer with syntax-highlighted changes:
+
+### Diff types
+
+<Tabs>
+  <Tab title="Unified diff">
+    Default view showing changes inline:
+
+    ```diff
+    function greet(name) {
+    - console.log('Hello, ' + name);
+    + console.log(`Hello, ${name}!`);
+    }
+    ```
+
+    - Lines prefixed with `-` are deletions (red background)
+    - Lines prefixed with `+` are additions (green background)
+    - Context lines (unchanged) have no prefix
+  </Tab>
+
+  <Tab title="Split diff">
+    Side-by-side comparison:
+
+    | Before | After |
+    |--------|-------|
+    | `console.log('Hello, ' + name);` | `console.log(\`Hello, ${name}!\`);` |
+
+    Useful for reviewing large changes where line-by-line comparison is difficult.
+  </Tab>
+
+  <Tab title="Syntax highlighting">
+    Diffs use Monaco Editor's syntax highlighting for:
+    - JavaScript/TypeScript
+    - Python
+    - Go
+    - Rust
+    - HTML/CSS
+    - JSON/YAML
+    - Markdown
+    - And 100+ more languages
+  </Tab>
+</Tabs>
+
+### Diff navigation
+
+<CardGroup cols={2}>
+  <Card title="Jump to next change" icon="arrow-down">
+    Press `F8` or click **Next Change** to jump to the next modified hunk.
+  </Card>
+
+  <Card title="Jump to previous change" icon="arrow-up">
+    Press `Shift+F8` or click **Previous Change**.
+  </Card>
+
+  <Card title="Fold unchanged lines" icon="compress">
+    Click the fold icon to collapse large blocks of unchanged code.
+  </Card>
+
+  <Card title="Expand context" icon="expand">
+    Click `...` to show more context lines above/below changes.
+  </Card>
+</CardGroup>
+
+## Staging changes
+
+Emdash supports Git's staging area for granular control over commits:
+
+### Stage files
+
+<Tabs>
+  <Tab title="Stage individual files">
+    In the File Changes panel, click the **Stage** button next to a file.
+
+    Or use the context menu:
+    - Right-click a file → **Stage changes**
+  </Tab>
+
+  <Tab title="Stage all files">
+    Click **Stage All** in the panel footer to stage all modified files.
+
+    Keyboard shortcut: `Cmd/Ctrl+Shift+A`
+  </Tab>
+
+  <Tab title="Unstage files">
+    Click **Unstage** to remove a file from the staging area.
+
+    The file remains modified but won't be included in the next commit.
+  </Tab>
+</Tabs>
+
+### Stage hunks
+
+Stage specific sections of a file:
+
+1. Open the diff viewer for a file
+2. Hover over a change hunk
+3. Click **Stage Hunk** (or `Cmd/Ctrl+K`)
+4. Only that hunk is staged; the rest remains unstaged
+
+<Info>
+Hunk staging is useful when a file has multiple unrelated changes (e.g., a feature + unrelated formatting fix).
+</Info>
+
+## Committing changes
+
+<Steps>
+  <Step title="Stage desired files">
+    Stage files or hunks you want to commit.
+  </Step>
+
+  <Step title="Write commit message">
+    In the File Changes panel footer:
+    1. Enter a commit message in the text field
+    2. Follow [Conventional Commits](https://www.conventionalcommits.org/):
+       - `feat: add dark mode`
+       - `fix: resolve login bug`
+       - `chore: update dependencies`
+  </Step>
+
+  <Step title="Commit">
+    Click **Commit** or press `Cmd/Ctrl+Enter`.
+
+    Emdash runs:
+    ```bash
+    git commit -m "feat: add dark mode"
+    ```
+  </Step>
+
+  <Step title="Verify commit">
+    Check the commit log:
+    ```bash
+    git log --oneline -5
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+Commits are **local** until you push to the remote. Create a PR to push changes.
+</Warning>
+
+## Comparison view
+
+The comparison view shows differences between two Git references:
+
+### Use cases
+
+- **Compare task branch to main**: See all changes before creating a PR
+- **Compare two commits**: Review changes between specific commits
+- **Compare before/after**: See impact of a refactor or bug fix
+
+### Opening comparison view
+
+<Steps>
+  <Step title="Select comparison targets">
+    In the File Changes panel header, click **Compare**:
+    - **Base**: Branch or commit to compare from (e.g., `main`)
+    - **Target**: Branch or commit to compare to (e.g., `emdash/feature-abc`)
+  </Step>
+
+  <Step title="View full diff">
+    The panel updates to show:
+    - All files changed between base and target
+    - Total insertions/deletions across all files
+    - Commit history between refs
+  </Step>
+
+  <Step title="Navigate and review">
+    Click individual files to view diffs, just like the standard view.
+  </Step>
+</Steps>
+
+### Comparison formats
+
+```bash
+# Three-dot diff (default): Changes in target since branching from base
+git diff main...emdash/feature-abc
+
+# Two-dot diff: All differences between branches
+git diff main..emdash/feature-abc
+```
+
+Emdash uses **three-dot diff** to exclude commits from `main` that landed after the branch was created.
+
+## Approval workflow
+
+Before creating a PR, Emdash encourages a review workflow:
+
+<Steps>
+  <Step title="Review all changes">
+    Open the File Changes panel and review each modified file:
+    - Verify the agent made intended changes
+    - Check for accidental modifications
+    - Look for security issues (hardcoded secrets, etc.)
+  </Step>
+
+  <Step title="Stage reviewed files">
+    As you review each file, stage it to mark it as "approved".
+
+    Files left unstaged are **not** included in the PR.
+  </Step>
+
+  <Step title="Commit staged changes">
+    Commit all staged files with a descriptive message.
+  </Step>
+
+  <Step title="Create PR">
+    Once all changes are committed, click **Create PR**.
+
+    Emdash generates a PR title/description based on your commits.
+  </Step>
+</Steps>
+
+<Info>
+This workflow ensures you don't blindly merge agent-generated code without review.
+</Info>
+
+## Common scenarios
+
+### Scenario 1: Agent modified too many files
+
+**Problem**: The agent changed files you didn't want modified.
+
+**Solution**:
+1. Review the File Changes panel
+2. Only stage files you want to keep
+3. Discard unwanted changes:
+   ```bash
+   git checkout -- src/unwanted-file.ts
+   ```
+4. Commit only staged files
+
+### Scenario 2: Large refactor needs multiple PRs
+
+**Problem**: The agent made 50+ file changes that should be split into smaller PRs.
+
+**Solution**:
+1. Stage files for PR #1 (e.g., core functionality)
+2. Commit with message: `feat: implement core feature`
+3. Create PR #1
+4. Stage files for PR #2 (e.g., tests)
+5. Commit: `test: add unit tests`
+6. Create PR #2 on a new branch
+
+### Scenario 3: Need to test before committing
+
+**Problem**: Want to test changes before finalizing the commit.
+
+**Solution**:
+1. Leave changes **unstaged**
+2. Run tests locally:
+   ```bash
+   npm test
+   ```
+3. If tests pass, stage and commit
+4. If tests fail, ask the agent to fix issues
+
+### Scenario 4: Reviewing merge conflicts
+
+**Problem**: The base branch has new commits that conflict with task branch.
+
+**Solution**:
+1. Merge `main` into task branch:
+   ```bash
+   git merge main
+   ```
+2. Resolve conflicts in the diff viewer
+3. Stage resolved files
+4. Commit the merge
+
+## Keyboard shortcuts
+
+| Action | macOS | Windows/Linux |
+|--------|-------|---------------|
+| Open File Changes | `Cmd+Shift+D` | `Ctrl+Shift+D` |
+| Stage file | `Cmd+K` | `Ctrl+K` |
+| Unstage file | `Cmd+Shift+K` | `Ctrl+Shift+K` |
+| Stage all | `Cmd+Shift+A` | `Ctrl+Shift+A` |
+| Commit | `Cmd+Enter` | `Ctrl+Enter` |
+| Next change | `F8` | `F8` |
+| Previous change | `Shift+F8` | `Shift+F8` |
+| Toggle split view | `Cmd+\` | `Ctrl+\` |
+
+## Limitations
+
+<Warning>
+The following features are **not yet supported**:
+
+- **Remote diffs**: File Changes panel only works for local projects
+- **Binary file diffs**: Images, PDFs, etc. show "Binary file changed"
+- **Large diffs**: Files with >10,000 line changes may be slow to render
+- **Inline editing**: Cannot edit files directly in the diff viewer (use Monaco editor)
+</Warning>
+
+## Best practices
+
+<CardGroup cols={2}>
+  <Card title="Review everything" icon="magnifying-glass">
+    Never commit agent changes without reviewing the diff. Agents make mistakes.
+  </Card>
+
+  <Card title="Stage incrementally" icon="layer-group">
+    Stage and commit related changes together. Split unrelated changes into separate commits.
+  </Card>
+
+  <Card title="Write clear messages" icon="message">
+    Commit messages explain *why* changes were made, not *what* changed (the diff shows that).
+  </Card>
+
+  <Card title="Test before committing" icon="flask">
+    Run tests on unstaged changes. Only commit if tests pass.
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="File Changes panel is empty">
+    **Symptom**: No files appear in the panel despite agent making changes.
+
+    **Solutions**:
+    1. Check if changes are committed: `git status`
+    2. Ensure you're in the task's worktree directory
+    3. Refresh the panel: Close and reopen
+  </Accordion>
+
+  <Accordion title="Diff viewer shows garbled text">
+    **Symptom**: Diff contains escape codes or binary data.
+
+    **Solution**: This is a binary file. View it outside Emdash (e.g., image viewer).
+  </Accordion>
+
+  <Accordion title="Cannot stage files">
+    **Symptom**: Clicking "Stage" does nothing.
+
+    **Solutions**:
+    1. Check if file exists: `ls <file-path>`
+    2. Ensure Git is tracking the file: `git status`
+    3. Check file permissions: `ls -la <file-path>`
+  </Accordion>
+
+  <Accordion title="Diff viewer is slow">
+    **Symptom**: Viewer freezes when opening large diffs.
+
+    **Solutions**:
+    1. Close other Monaco editors to free memory
+    2. View diff in external tool: `git diff <file-path>`
+    3. Split large changes into smaller commits
+  </Accordion>
+</AccordionGroup>
+
+## Related resources
+
+- [FileChangesPanel source](https://github.com/generalaction/emdash/blob/main/src/renderer/components/FileChangesPanel.tsx)
+- [Monaco Editor docs](https://microsoft.github.io/monaco-editor/)
+- [Git staging docs](https://git-scm.com/book/en/v2/Git-Basics-Recording-Changes-to-the-Repository)
+- [GitHub workflow →](/features/github-workflow)

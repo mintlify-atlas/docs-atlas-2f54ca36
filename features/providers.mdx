@@ -1,0 +1,201 @@
+---
+title: Supported providers
+description: Complete list of supported CLI coding agents and how to install them
+---
+
+Emdash currently supports **22 CLI coding agents** and is adding new providers regularly. Each agent runs in its own isolated Git worktree, allowing you to run multiple agents in parallel on different tasks.
+
+## Provider list
+
+All 22 providers are defined in `src/shared/providers/registry.ts` as `ProviderDefinition` objects that configure how Emdash spawns and interacts with each CLI.
+
+<Note>
+If you're missing a provider, [open an issue](https://github.com/generalaction/emdash/issues) or submit a PR following the [Contributing Guide](https://github.com/generalaction/emdash/blob/main/CONTRIBUTING.md).
+</Note>
+
+| Provider | Status | Installation |
+|----------|--------|-------------|
+| [Amp](https://ampcode.com/manual) | ✅ Supported | `npm install -g @sourcegraph/amp@latest` |
+| [Auggie](https://docs.augmentcode.com/cli/overview) | ✅ Supported | `npm install -g @augmentcode/auggie` |
+| [Autohand Code](https://autohand.ai/code/) | ✅ Supported | `npm install -g autohand-cli` |
+| [Charm](https://github.com/charmbracelet/crush) | ✅ Supported | `npm install -g @charmland/crush` |
+| [Claude Code](https://docs.anthropic.com/claude/docs/claude-code) | ✅ Supported | `curl -fsSL https://claude.ai/install.sh \| bash` |
+| [Cline](https://docs.cline.bot/cline-cli/overview) | ✅ Supported | `npm install -g cline` |
+| [Codebuff](https://www.codebuff.com/docs/help/quick-start) | ✅ Supported | `npm install -g codebuff` |
+| [Codex](https://developers.openai.com/codex/cli/) | ✅ Supported | `npm install -g @openai/codex` |
+| [Continue](https://docs.continue.dev/guides/cli) | ✅ Supported | `npm i -g @continuedev/cli` |
+| [Cursor](https://cursor.com/cli) | ✅ Supported | `curl https://cursor.com/install -fsS \| bash` |
+| [Droid](https://docs.factory.ai/cli/getting-started/quickstart) | ✅ Supported | `curl -fsSL https://app.factory.ai/cli \| sh` |
+| [Gemini](https://github.com/google-gemini/gemini-cli) | ✅ Supported | `npm install -g @google/gemini-cli` |
+| [GitHub Copilot](https://docs.github.com/en/copilot/how-tos/set-up/installing-github-copilot-in-the-cli) | ✅ Supported | `npm install -g @github/copilot` |
+| [Goose](https://github.com/block/goose) | ✅ Supported | `curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh \| bash` |
+| [Kilocode](https://kilo.ai/docs/cli) | ✅ Supported | `npm install -g @kilocode/cli` |
+| [Kimi](https://www.kimi.com/code/docs/en/kimi-cli/guides/getting-started.html) | ✅ Supported | `uv tool install --python 3.13 kimi-cli` |
+| [Kiro](https://kiro.dev/docs/cli/) | ✅ Supported | `curl -fsSL https://cli.kiro.dev/install \| bash` |
+| [Mistral Vibe](https://github.com/mistralai/mistral-vibe) | ✅ Supported | `curl -LsSf https://mistral.ai/vibe/install.sh \| bash` |
+| [OpenCode](https://opencode.ai/docs/) | ✅ Supported | `npm install -g opencode-ai` |
+| [Pi](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) | ✅ Supported | `npm install -g @mariozechner/pi-coding-agent` |
+| [Qwen Code](https://github.com/QwenLM/qwen-code) | ✅ Supported | `npm install -g @qwen-code/qwen-code` |
+| [Rovo Dev](https://support.atlassian.com/rovo/docs/install-and-run-rovo-dev-cli-on-your-device/) | ✅ Supported | `acli rovodev auth login` |
+
+## Verifying installation
+
+Emdash automatically detects installed CLI providers when you create a new task. To verify an agent is properly installed:
+
+<Steps>
+  <Step title="Check CLI availability">
+    Test the provider's CLI command directly:
+    ```bash
+    # Most providers support --version
+    claude --version
+    codex --version
+    qwen --version
+    ```
+  </Step>
+
+  <Step title="Verify in Emdash">
+    Open Emdash and create a new task. The provider dropdown will only show detected agents.
+  </Step>
+
+  <Step title="Check PATH (macOS/Linux)">
+    If a provider isn't detected, ensure its installation directory is in your PATH. Emdash's `main.ts` adds common locations:
+    - Homebrew: `/opt/homebrew/bin`, `/usr/local/bin`
+    - npm global: `~/.npm-global/bin`, `/usr/local/lib/node_modules`
+    - nvm: `~/.nvm/versions/node/*/bin`
+  </Step>
+</Steps>
+
+## Provider configuration
+
+Each provider definition in `registry.ts` includes:
+
+```typescript
+export type ProviderDefinition = {
+  id: ProviderId;
+  name: string;
+  docUrl?: string;
+  installCommand?: string;
+  commands?: string[];           // For CLI detection
+  versionArgs?: string[];        // Usually ['--version']
+  cli?: string;                  // Binary name
+  autoApproveFlag?: string;      // e.g. '--dangerously-skip-permissions'
+  initialPromptFlag?: string;    // How to pass initial prompt
+  useKeystrokeInjection?: boolean; // For agents without prompt flags
+  resumeFlag?: string;           // How to resume sessions
+  sessionIdFlag?: string;        // Session isolation (Claude only)
+  defaultArgs?: string[];        // Default CLI arguments
+  icon?: string;                 // Icon filename
+  terminalOnly?: boolean;        // All current providers are terminal-only
+};
+```
+
+### Key fields
+
+<AccordionGroup>
+  <Accordion title="autoApproveFlag">
+    Flag to run the agent in full-auto mode without user confirmation prompts. Examples:
+    - Claude: `--dangerously-skip-permissions`
+    - Codex: `--full-auto`
+    - Qwen: `--yolo`
+  </Accordion>
+
+  <Accordion title="initialPromptFlag">
+    How the agent accepts the initial prompt:
+    - Empty string (`''`): Positional argument
+    - Flag like `-i` or `-p`: Separate flag + argument
+    - `undefined`: No CLI prompt support (not usable for PR generation)
+  </Accordion>
+
+  <Accordion title="useKeystrokeInjection">
+    When `true`, Emdash types the prompt into the TUI after startup (used for Amp and OpenCode which lack CLI prompt flags).
+  </Accordion>
+
+  <Accordion title="sessionIdFlag">
+    Claude-only feature. Emdash generates a deterministic UUID from the task/conversation ID and passes it via `--session-id` for multi-chat isolation.
+  </Accordion>
+</AccordionGroup>
+
+## Adding a new provider
+
+To add support for a new CLI agent:
+
+<Steps>
+  <Step title="Update the registry">
+    Add a new `ProviderDefinition` to `src/shared/providers/registry.ts`:
+    ```typescript
+    {
+      id: 'my-agent',
+      name: 'My Agent',
+      docUrl: 'https://my-agent.dev/docs',
+      installCommand: 'npm install -g my-agent',
+      commands: ['my-agent'],
+      versionArgs: ['--version'],
+      cli: 'my-agent',
+      autoApproveFlag: '--auto',
+      initialPromptFlag: '-p',
+      icon: 'my-agent.svg',
+      terminalOnly: true,
+    }
+    ```
+  </Step>
+
+  <Step title="Add API key passthrough">
+    If your agent requires API keys, add them to `AGENT_ENV_VARS` in `src/main/services/ptyManager.ts`:
+    ```typescript
+    const AGENT_ENV_VARS = [
+      'OPENAI_API_KEY',
+      'ANTHROPIC_API_KEY',
+      'MY_AGENT_API_KEY', // Add here
+      // ...
+    ];
+    ```
+  </Step>
+
+  <Step title="Add provider icon">
+    Place the icon in `src/renderer/assets/providers/` (SVG or PNG).
+  </Step>
+
+  <Step title="Test the integration">
+    - Install the CLI locally
+    - Create a task with the new provider
+    - Verify it spawns correctly and receives prompts
+  </Step>
+</Steps>
+
+<Warning>
+All new providers must pass format, lint, and type checks:
+```bash
+pnpm run format
+pnpm run lint
+pnpm run type-check
+pnpm exec vitest run
+```
+</Warning>
+
+## Provider differences
+
+### Spawn modes
+
+Emdash uses three PTY spawn strategies:
+
+1. **Shell-based** (`startPty`): `{cli} {args}; exec {shell} -il` — user gets a shell after agent exits
+2. **Direct spawn** (`startDirectPty`): Spawns the CLI directly using cached path (faster, preferred)
+3. **SSH** (`startSshPty`): Wraps `ssh -tt {target}` for remote development
+
+### Session isolation
+
+Only **Claude Code** supports multi-session isolation via `--session-id`. For other providers, each conversation in a task shares the same CLI process.
+
+### Resume support
+
+Providers with `resumeFlag` can continue previous sessions:
+- Claude: `-c -r`
+- Qwen: `--continue`
+- Kilocode: `--continue`
+- Gemini: `--resume`
+
+## Related resources
+
+- [Provider registry source](https://github.com/generalaction/emdash/blob/main/src/shared/providers/registry.ts)
+- [PTY manager source](https://github.com/generalaction/emdash/blob/main/src/main/services/ptyManager.ts)
+- [Contributing guide](https://github.com/generalaction/emdash/blob/main/CONTRIBUTING.md)

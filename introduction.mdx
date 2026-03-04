@@ -1,0 +1,176 @@
+---
+title: Introduction
+description: Learn what Emdash is and how it transforms your AI coding workflow
+---
+
+Emdash is an open-source **Agentic Development Environment (ADE)** that orchestrates multiple CLI coding agents in parallel, each running in its own isolated git worktree. Think of it as a mission control center for AI coding agents.
+
+## What is an Agentic Development Environment?
+
+An Agentic Development Environment is a workspace designed specifically for managing AI coding agents. Unlike traditional IDEs that are built for human developers, an ADE provides the infrastructure to run multiple autonomous coding agents simultaneously while preventing conflicts and maintaining code integrity.
+
+Emdash bridges the gap between powerful CLI coding agents (like Claude Code, Codex, Qwen Code) and practical software development workflows. It gives you:
+
+- **Full terminal access** to each agent with streaming output
+- **Visual diff review** before committing changes
+- **Seamless GitHub integration** for PR creation and CI tracking
+- **Issue management** with Linear, Jira, and GitHub Issues
+- **Remote development** over SSH to leverage cloud compute
+
+## Why Emdash exists
+
+Coding agents have become incredibly powerful, but they come with challenges:
+
+<CardGroup cols={2}>
+  <Card title="The conflict problem" icon="exclamation-triangle">
+    Running multiple agents in the same directory causes file conflicts and git chaos. Agents overwrite each other's changes.
+  </Card>
+  <Card title="The speed problem" icon="gauge-high">
+    Agents work best when they can run in parallel on different tasks. Serial execution wastes time and compute.
+  </Card>
+  <Card title="The isolation problem" icon="layer-group">
+    Testing agent changes in your main codebase is risky. You need safe sandboxes that mirror production.
+  </Card>
+  <Card title="The visibility problem" icon="eye-slash">
+    CLI agents run in black boxes. You can't see what they're doing until they finish, and reviewing changes is painful.
+  </Card>
+</CardGroup>
+
+Emdash solves these problems by:
+
+1. **Isolating each agent** in its own git worktree on a dedicated branch
+2. **Enabling parallel execution** so multiple agents work simultaneously
+3. **Providing real-time visibility** into agent actions with full terminal streaming
+4. **Making review easy** with built-in diff visualization and PR workflows
+
+## Key benefits
+
+### Parallel execution at scale
+
+Run as many agents as your system can handle. Each task gets its own worktree at `../worktrees/{task-name}-{hash}` on branch `emdash/{task-name}-{hash}`. The **worktree pool** eliminates the typical 3-7 second worktree creation delay — pre-created worktrees are claimed instantly when you start a new task.
+
+### Provider agnostic
+
+Emdash supports 22 CLI coding agents and counting. All providers are defined in a unified registry at `src/shared/providers/registry.ts`, making it easy to add new agents. Switch providers per task, or run different agents in parallel on the same codebase.
+
+<Accordion title="Supported providers">
+  Claude Code, Codex, Qwen Code, Amp, Cursor, GitHub Copilot, Gemini, Droid, OpenCode, Charm, Auggie, Goose, Kimi, Kilocode, Kiro, Rovo Dev, Cline, Continue, Codebuff, Mistral Vibe, Pi, Autohand Code
+
+  See the full provider matrix with install commands at [Features → Providers](/features/providers).
+</Accordion>
+
+### Multi-provider support
+
+Each provider requires different CLI flags and invocation patterns. Emdash handles this complexity:
+
+- **Auto-approve flags** for hands-free operation (e.g., `--dangerously-skip-permissions` for Claude)
+- **Initial prompt delivery** via CLI flags (`-i` for Gemini) or keystroke injection (Amp, OpenCode)
+- **Session isolation** for providers like Claude that support `--session-id`
+- **Resume support** to continue previous conversations (e.g., `-c -r` for Claude)
+
+### Worktree isolation
+
+Git worktrees are the secret sauce. Each task runs in a separate worktree but shares the same `.git` directory, so they all see the same commit history. Changes stay isolated until you're ready to merge.
+
+Emdash automatically preserves gitignored files like `.env` and `.envrc` from your main repo to each worktree, so agents have the configuration they need. Configure custom patterns in `.emdash.json`:
+
+```json .emdash.json
+{
+  "preservePatterns": [".claude/**", ".env.local"]
+}
+```
+
+### Remote development over SSH
+
+Connect to remote machines and run agents there instead of locally. This is perfect for:
+
+- Leveraging powerful cloud servers with more CPU/RAM
+- Working with large codebases that don't fit on your laptop
+- Running resource-intensive agents without slowing down your local machine
+
+Emdash supports SSH agent, private key, and password authentication, with credentials stored securely in your OS keychain via `keytar`.
+
+<Note>
+  Remote worktrees are created at `<project>/.emdash/worktrees/<task-slug>/` on the server. File diffs, branch push, and GitHub features are currently local-only.
+</Note>
+
+### Cross-agent skills
+
+Emdash implements the [Agent Skills](https://agentskills.io) standard for reusable, cross-agent skill packages. Install skills once to `~/.agentskills/`, and Emdash automatically syncs them to each agent's native directory:
+
+- Claude Code: `~/.claude/commands/`
+- Codex: `~/.codex/skills/`
+- Qwen Code: `~/.qwen/skills/`
+
+The skills catalog merges from OpenAI, Anthropic, and local user-created skills.
+
+## How it works
+
+Here's the basic workflow:
+
+<Steps>
+  <Step title="Open a project">
+    Point Emdash at any git repository on your local machine or a remote server via SSH. Emdash stores project metadata in a local SQLite database.
+  </Step>
+
+  <Step title="Create a task">
+    Click **New Task**, select a provider, and enter a prompt. You can also attach a Linear, Jira, or GitHub issue. Emdash creates (or claims from the pool) a worktree and spawns the agent in a PTY (pseudo-terminal).
+  </Step>
+
+  <Step title="Watch the agent work">
+    The agent's terminal streams to your UI in real-time using `xterm.js` and `node-pty`. See exactly what the agent is doing, and interact with the terminal if needed.
+  </Step>
+
+  <Step title="Review changes">
+    View file diffs in the built-in Monaco editor. Emdash shows exactly what changed, with syntax highlighting and side-by-side comparison.
+  </Step>
+
+  <Step title="Create a PR">
+    Push the branch and create a pull request using GitHub CLI (`gh`). Emdash shows PR details, CI checks, and lets you merge from the UI.
+  </Step>
+
+  <Step title="Run more tasks in parallel">
+    Create another task while the first is running. Each gets its own isolated worktree. No conflicts, no waiting.
+  </Step>
+</Steps>
+
+## Architecture at a glance
+
+Emdash is built with Electron, TypeScript, and React:
+
+- **Main process** (Node.js): Manages git operations, spawns PTYs, handles IPC, and stores data in SQLite
+- **Renderer process** (React + Vite): Provides the UI with Monaco editor, xterm terminals, and real-time updates
+- **PTY manager** (`src/main/services/ptyManager.ts`): Spawns agents in pseudo-terminals with isolated environments
+- **Worktree services**: Create, manage, and pool git worktrees for instant task starts
+- **Database service** (Drizzle ORM + SQLite): Stores projects, tasks, conversations, and settings
+
+All IPC communication uses a `{ success: boolean, data?: any, error?: string }` pattern for type safety.
+
+## What you'll learn next
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install Emdash on macOS, Windows, or Linux and set up your first coding agent.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Go from zero to running your first agent task in under 5 minutes.
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/worktrees">
+    Deep dive into git worktrees, agent providers, and parallel execution.
+  </Card>
+  <Card title="Features" icon="sparkles" href="/features/providers">
+    Explore all 22+ supported providers, SSH remote development, and more.
+  </Card>
+</CardGroup>
+
+## Community and support
+
+Emdash is open source and backed by Y Combinator (W26). Join the community:
+
+- **GitHub**: [generalaction/emdash](https://github.com/generalaction/emdash) — Star, open issues, contribute
+- **Discord**: [discord.gg/f2fv7YxuR2](https://discord.gg/f2fv7YxuR2) — Ask questions, share projects
+- **Twitter**: [@emdashsh](https://twitter.com/emdashsh) — Updates and announcements
+
+<Tip>
+  Emdash is provider-agnostic and extensible. If your favorite agent isn't supported yet, it's easy to add — see [Guides → Adding Providers](/guides/adding-providers).
+</Tip>

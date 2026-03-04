@@ -1,0 +1,548 @@
+---
+title: SSH connection setup
+description: Configure SSH for remote development with Emdash agents
+---
+
+Emdash supports running CLI agents on remote machines over SSH. This guide covers SSH setup, credential management, and troubleshooting common connection issues.
+
+## SSH architecture overview
+
+Emdash's SSH implementation provides:
+
+- **Multiple auth methods**: Password, private key, or SSH agent
+- **Secure credential storage**: Passwords and passphrases stored in OS keychain via `keytar`
+- **Host key verification**: Automatic management of `~/.ssh/known_hosts`
+- **Connection pooling**: Up to 10 concurrent connections
+- **Remote PTY streaming**: Real-time terminal output to local UI
+
+<Warning>
+Remote features are still in development. Local-only features include: file diffs, file watching, branch push, worktree pooling, and GitHub/PR operations.
+</Warning>
+
+## Authentication methods
+
+Emdash supports three SSH authentication methods:
+
+### Password authentication
+
+Simplest method — authenticate with username and password.
+
+```typescript
+{
+  authType: 'password',
+  host: 'example.com',
+  port: 22,
+  username: 'your-username'
+}
+```
+
+- Password is stored securely in OS keychain
+- Service name: `emdash-ssh`
+- Keychain key format: `{connectionId}:password`
+
+### Private key authentication
+
+Most secure method — authenticate with an SSH key pair.
+
+```typescript
+{
+  authType: 'key',
+  host: 'example.com',
+  port: 22,
+  username: 'your-username',
+  privateKeyPath: '~/.ssh/id_ed25519'
+}
+```
+
+- Supports passphrase-protected keys
+- Passphrase stored in OS keychain if provided
+- Keychain key format: `{connectionId}:passphrase`
+- Paths starting with `~` are expanded to home directory
+
+<Note>
+Emdash supports all standard SSH key types: RSA, Ed25519, ECDSA, DSA.
+</Note>
+
+### SSH agent authentication
+
+Use your existing SSH agent for authentication.
+
+```typescript
+{
+  authType: 'agent',
+  host: 'example.com',
+  port: 22,
+  username: 'your-username'
+}
+```
+
+- Requires `SSH_AUTH_SOCK` environment variable
+- Automatically detected from user's login shell
+- Supports 1Password, Secretive, and standard ssh-agent
+
+<Warning>
+SSH agent auth may fail when Emdash is launched from the GUI (Finder/Dock) instead of a terminal. Use `IdentityAgent` in `~/.ssh/config` or launch from terminal.
+</Warning>
+
+## Setting up SSH step-by-step
+
+<Steps>
+
+<Step title="Generate SSH keys (if needed)">
+
+If you don't have SSH keys yet, generate a new Ed25519 key pair:
+
+```bash
+ssh-keygen -t ed25519 -C "your_email@example.com"
+```
+
+Press Enter to accept the default location (`~/.ssh/id_ed25519`).
+
+Optionally add a passphrase for extra security.
+
+</Step>
+
+<Step title="Copy public key to remote server">
+
+Add your public key to the remote server's `~/.ssh/authorized_keys`:
+
+```bash
+ssh-copy-id -i ~/.ssh/id_ed25519.pub username@example.com
+```
+
+Or manually:
+
+```bash
+cat ~/.ssh/id_ed25519.pub | ssh username@example.com "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+```
+
+</Step>
+
+<Step title="Configure SSH agent (optional)">
+
+For SSH agent authentication, start the agent and add your key:
+
+```bash
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_ed25519
+```
+
+Verify keys are loaded:
+
+```bash
+ssh-add -l
+```
+
+<Note>
+On macOS, add `AddKeysToAgent yes` to `~/.ssh/config` to persist keys across sessions.
+</Note>
+
+</Step>
+
+<Step title="Test the connection">
+
+Verify SSH works before using it in Emdash:
+
+```bash
+ssh username@example.com
+```
+
+If this fails, fix the connection before proceeding.
+
+</Step>
+
+<Step title="Add connection in Emdash">
+
+1. Open Emdash
+2. Go to Settings → SSH Connections
+3. Click "Add Connection"
+4. Fill in host, port, username
+5. Select authentication method
+6. Provide credentials (password, key path, or use agent)
+7. Click "Connect"
+
+</Step>
+
+</Steps>
+
+## Credential storage with keytar
+
+Emdash uses `keytar` to store SSH credentials securely in the OS keychain.
+
+### Implementation details
+
+```typescript src/main/services/ssh/SshCredentialService.ts
+import keytar from 'keytar';
+
+const SERVICE_NAME = 'emdash-ssh';
+
+export class SshCredentialService {
+  async storePassword(connectionId: string, password: string): Promise<void> {
+    await keytar.setPassword(SERVICE_NAME, `${connectionId}:password`, password);
+  }
+
+  async getPassword(connectionId: string): Promise<string | null> {
+    return await keytar.getPassword(SERVICE_NAME, `${connectionId}:password`);
+  }
+
+  async deletePassword(connectionId: string): Promise<void> {
+    await keytar.deletePassword(SERVICE_NAME, `${connectionId}:password`);
+  }
+}
+```
+
+### Storage locations
+
+- **macOS**: Keychain Access (`emdash-ssh` service)
+- **Linux**: Secret Service API (GNOME Keyring, KWallet)
+- **Windows**: Credential Vault
+
+<Note>
+Credentials are tied to connection IDs. Deleting a connection also deletes its stored credentials.
+</Note>
+
+## Host key verification
+
+Emdash automatically manages SSH host keys in `~/.ssh/known_hosts`.
+
+### How it works
+
+<Steps>
+
+<Step title="First connection">
+
+When connecting to a new host:
+
+1. Server presents its host key
+2. Emdash calculates SHA256 fingerprint
+3. User is prompted to verify the fingerprint
+4. On approval, key is added to `~/.ssh/known_hosts`
+
+</Step>
+
+<Step title="Subsequent connections">
+
+On future connections:
+
+1. Server presents host key
+2. Emdash checks against `known_hosts`
+3. If key matches, connection proceeds
+4. If key changed, connection is rejected
+
+</Step>
+
+<Step title="Key change detection">
+
+If a host key changes (possible security issue):
+
+- Emdash blocks the connection
+- User is warned about the key change
+- User must manually remove the old key to proceed
+
+</Step>
+
+</Steps>
+
+### Host key service API
+
+```typescript src/main/services/ssh/SshHostKeyService.ts
+export class SshHostKeyService {
+  // Verify a host key (returns 'known', 'new', or 'changed')
+  async verifyHostKey(
+    host: string,
+    port: number,
+    keyType: string,
+    fingerprint: string
+  ): Promise<'known' | 'new' | 'changed'>
+
+  // Add a host to known_hosts
+  async addKnownHost(
+    host: string,
+    port: number,
+    key: Buffer,
+    algorithm: string = 'ssh-ed25519'
+  ): Promise<void>
+
+  // Remove a host from known_hosts
+  async removeKnownHost(host: string, port: number): Promise<void>
+
+  // Get fingerprint for a key
+  getFingerprint(key: Buffer): string // Returns "SHA256:..."
+}
+```
+
+### Manually managing known_hosts
+
+To remove a host key manually:
+
+```bash
+ssh-keygen -R example.com
+```
+
+Or for non-standard ports:
+
+```bash
+ssh-keygen -R "[example.com]:2222"
+```
+
+## Remote PTY and agent execution
+
+When you create a task on an SSH connection, Emdash:
+
+1. Establishes SSH connection
+2. Creates a remote worktree at `<project>/.emdash/worktrees/<task-slug>/`
+3. Spawns the agent CLI via `ssh2`'s shell API
+4. Streams terminal output to local UI in real-time
+
+### Shell wrapping for remote PTYs
+
+Remote commands are wrapped in a login shell for proper environment setup:
+
+```typescript src/main/services/ssh/SshService.ts
+const innerCommand = cwd ? `cd ${quoteShellArg(cwd)} && ${command}` : command;
+const fullCommand = `bash -l -c ${quoteShellArg(innerCommand)}`;
+```
+
+This ensures:
+
+- `~/.bashrc`, `~/.profile` are sourced
+- `~/.ssh/config` is available
+- Git config is loaded
+- Agent binaries in `PATH` are found
+
+<Warning>
+All shell arguments are escaped via `quoteShellArg()` to prevent shell injection attacks.
+</Warning>
+
+## Connection pooling
+
+Emdash maintains a pool of up to 10 concurrent SSH connections.
+
+```typescript src/main/services/ssh/SshService.ts
+const MAX_CONNECTIONS = 10;
+const POOL_WARNING_THRESHOLD = 0.8;
+
+private connections: ConnectionPool = {};
+private pendingConnections: Map<string, Promise<string>> = new Map();
+```
+
+### Pool behavior
+
+- Connections are reused when possible
+- If a connection for a given ID already exists, it's returned immediately
+- In-flight connection attempts are coalesced (no duplicate TCP sockets)
+- Warning logged when pool reaches 80% capacity
+- Hard limit enforced at 10 connections
+
+### Connection lifecycle
+
+```typescript
+// Connect
+const connectionId = await sshService.connect(config);
+
+// Execute command
+const result = await sshService.executeCommand(connectionId, 'git status');
+
+// Disconnect
+await sshService.disconnect(connectionId);
+```
+
+## Troubleshooting SSH issues
+
+<Accordion title="Connection refused">
+
+**Symptoms**: `Connection refused` or timeout when connecting
+
+**Solutions**:
+
+1. Verify SSH server is running:
+   ```bash
+   sudo systemctl status sshd  # Linux
+   sudo launchctl list | grep ssh  # macOS
+   ```
+
+2. Check firewall rules allow port 22 (or custom port)
+
+3. Test connection from terminal:
+   ```bash
+   ssh -v username@example.com
+   ```
+
+</Accordion>
+
+<Accordion title="Permission denied (publickey)">
+
+**Symptoms**: Authentication fails with public key
+
+**Solutions**:
+
+1. Verify public key is in `~/.ssh/authorized_keys` on server
+
+2. Check permissions on server:
+   ```bash
+   chmod 700 ~/.ssh
+   chmod 600 ~/.ssh/authorized_keys
+   ```
+
+3. Verify correct private key path in Emdash (expand `~` manually if needed)
+
+4. Check SSH server allows key auth:
+   ```bash
+   # On server, check /etc/ssh/sshd_config
+   PubkeyAuthentication yes
+   ```
+
+</Accordion>
+
+<Accordion title="SSH agent not found">
+
+**Symptoms**: `SSH_AUTH_SOCK` not set, agent auth fails
+
+**Solutions**:
+
+1. Start SSH agent:
+   ```bash
+   eval "$(ssh-agent -s)"
+   ```
+
+2. Add keys:
+   ```bash
+   ssh-add ~/.ssh/id_ed25519
+   ```
+
+3. Launch Emdash from terminal (not Finder/Dock)
+
+4. Or use `IdentityAgent` in `~/.ssh/config`:
+   ```
+   Host example.com
+     IdentityAgent ~/.1password/agent.sock
+   ```
+
+</Accordion>
+
+<Accordion title="Host key verification failed">
+
+**Symptoms**: Connection blocked due to changed host key
+
+**Solutions**:
+
+1. Remove old key:
+   ```bash
+   ssh-keygen -R example.com
+   ```
+
+2. Verify the server wasn't compromised (ask your admin)
+
+3. Reconnect in Emdash to add new key
+
+</Accordion>
+
+<Accordion title="Keytar errors on Linux">
+
+**Symptoms**: `keytar` fails to store credentials
+
+**Solutions**:
+
+Install required packages:
+
+```bash
+# Ubuntu/Debian
+sudo apt install libsecret-1-dev gnome-keyring
+
+# Fedora
+sudo dnf install libsecret-devel gnome-keyring
+
+# Arch
+sudo pacman -S libsecret gnome-keyring
+```
+
+Then rebuild native modules:
+
+```bash
+pnpm run rebuild
+```
+
+</Accordion>
+
+<Accordion title="PTY spawn fails on remote">
+
+**Symptoms**: Agent doesn't start on remote machine
+
+**Solutions**:
+
+1. Verify agent is installed on remote:
+   ```bash
+   ssh user@example.com "which claude"
+   ```
+
+2. Check agent is in remote `PATH`:
+   ```bash
+   ssh user@example.com "echo \$PATH"
+   ```
+
+3. Install agent on remote:
+   ```bash
+   ssh user@example.com "curl -fsSL https://claude.ai/install.sh | bash"
+   ```
+
+</Accordion>
+
+## Security considerations
+
+### Shell injection protection
+
+All remote commands use `quoteShellArg()` to escape arguments:
+
+```typescript src/main/utils/shellEscape.ts
+export function quoteShellArg(arg: string): string {
+  return `'${arg.replace(/'/g, "'\\''")}' `;
+}
+```
+
+### Environment variable validation
+
+Env var keys are validated against a strict regex:
+
+```typescript
+/^[A-Za-z_][A-Za-z0-9_]*$/
+```
+
+### Remote PTY restrictions
+
+- Only allowlisted shell binaries (`bash`, `sh`, `zsh`)
+- File access gated by `isPathSafe()` checks
+- No direct shell injection in SFTP operations
+
+### Credential isolation
+
+- Each connection gets a unique ID
+- Credentials stored per-connection, not globally
+- Deleting a connection purges its credentials from keychain
+
+## Advanced: SSH config integration
+
+Emdash reads `~/.ssh/config` for advanced settings:
+
+```bash ~/.ssh/config
+Host example
+  HostName example.com
+  User your-username
+  Port 2222
+  IdentityFile ~/.ssh/id_ed25519
+  IdentityAgent ~/.1password/agent.sock
+  ForwardAgent yes
+```
+
+Currently supported directives:
+
+- `IdentityAgent` — Custom SSH agent socket path (overrides `SSH_AUTH_SOCK`)
+
+<Note>
+Full SSH config parsing is not yet implemented. Most directives are ignored.
+</Note>
+
+## Next steps
+
+- [Troubleshooting](/guides/troubleshooting) — Common SSH and PTY issues
+- [Adding providers](/guides/adding-providers) — Add new CLI agents
+- [Linear and Jira integration](/guides/linear-jira) — Link remote tasks to issues

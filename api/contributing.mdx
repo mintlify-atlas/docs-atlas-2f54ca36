@@ -1,0 +1,493 @@
+---
+title: Contributing
+description: Guidelines for contributing to Emdash
+---
+
+## Welcome Contributors
+
+Thanks for your interest in contributing to Emdash! We favor small, focused PRs and clear intent over big changes. This guide explains our workflow, conventions, and quality standards.
+
+## Getting Started
+
+<Steps>
+  <Step title="Fork and clone">
+    Fork the [Emdash repository](https://github.com/generalaction/emdash) on GitHub, then clone your fork:
+    
+    ```bash
+    git clone https://github.com/<your-username>/emdash.git
+    cd emdash
+    ```
+  </Step>
+
+  <Step title="Set up your environment">
+    Use the correct Node.js version:
+    ```bash
+    nvm use  # Installs Node 22.20.0 via .nvmrc
+    ```
+    
+    Install dependencies and start the dev server:
+    ```bash
+    pnpm run d
+    ```
+  </Step>
+
+  <Step title="Verify everything works">
+    Run the quality checks:
+    ```bash
+    pnpm run format
+    pnpm run lint
+    pnpm run type-check
+    pnpm exec vitest run
+    ```
+  </Step>
+</Steps>
+
+## Development Workflow
+
+### 1. Create a Feature Branch
+
+Always work on a feature branch, never directly on `main`:
+
+```bash
+git checkout -b feat/your-feature-name
+```
+
+<Tip>
+Use descriptive branch names:
+- `feat/add-worktree-pooling` for new features
+- `fix/pty-memory-leak` for bug fixes
+- `refactor/cleanup-ipc-handlers` for refactoring
+- `docs/update-contributing` for documentation
+</Tip>
+
+### 2. Make Your Changes
+
+**Keep PRs small and focused:**
+- One logical change per PR
+- Prefer a series of small PRs over one large one
+- Include UI screenshots/GIFs when modifying the interface
+- Update documentation when behavior changes
+
+**Follow the code style:**
+- TypeScript strict mode (no `any` unless necessary)
+- Functional React components with hooks
+- Explicit types over inference when it improves clarity
+
+### 3. Run Quality Checks
+
+Before committing, **always** run these commands:
+
+```bash
+pnpm run format       # Format with Prettier (required)
+pnpm run lint         # ESLint
+pnpm run type-check   # TypeScript type checking
+pnpm exec vitest run  # Run all tests
+```
+
+<Info>
+**Pre-commit hooks** run automatically via Husky + lint-staged:
+- Staged files are auto-formatted with Prettier
+- Linting runs on staged files
+- Type checking and tests run in CI
+
+To skip hooks for WIP commits: `git commit --no-verify`
+</Info>
+
+### 4. Commit with Conventional Commits
+
+Use [Conventional Commits](https://www.conventionalcommits.org/) format:
+
+```
+<type>(<scope>): <description>
+
+[optional body]
+
+[optional footer]
+```
+
+#### Commit Types
+
+- **`feat:`** — New user-facing capability
+- **`fix:`** — Bug fix
+- **`refactor:`** — Code restructuring without behavior change
+- **`docs:`** — Documentation changes
+- **`chore:`** — Maintenance tasks (deps, config)
+- **`test:`** — Adding or updating tests
+- **`perf:`** — Performance improvements
+
+#### Commit Examples
+
+```bash
+# Feature with scope
+git commit -m "feat(worktree): add instant worktree creation via pooling"
+
+# Bug fix with issue reference
+git commit -m "fix(pty): resolve memory leak in terminal cleanup (#123)"
+
+# Documentation
+git commit -m "docs: update contributing guide with new workflow"
+
+# Refactoring
+git commit -m "refactor(ipc): consolidate error handling patterns"
+```
+
+### 5. Open a Pull Request
+
+When you're ready:
+
+1. Push your branch to your fork:
+   ```bash
+   git push origin feat/your-feature-name
+   ```
+
+2. Open a PR on GitHub from your branch to `generalaction/emdash:main`
+
+3. **Fill out the PR description:**
+   - **What**: Describe the change
+   - **Why**: Explain the rationale
+   - **Testing**: List testing steps
+   - **Screenshots**: Include for UI changes
+   - **Related Issues**: Link with `Fixes #123` or `Related to #456`
+
+4. Keep the PR title in Conventional Commit format
+
+## Code Style
+
+### TypeScript
+
+```typescript
+// Good: Explicit types
+function createTask(name: string, projectId: string): Promise<Task> {
+  // ...
+}
+
+// Bad: Implicit any
+function createTask(name, projectId) {
+  // ...
+}
+
+// Good: Type imports
+import type { Task, Project } from './types';
+
+// Good: Strict null checks
+const task: Task | null = await getTask(id);
+if (task) {
+  console.log(task.name);
+}
+```
+
+### React Components
+
+```typescript
+// Good: Functional component with explicit props
+interface TaskCardProps {
+  task: Task;
+  onSelect: (taskId: string) => void;
+}
+
+export function TaskCard({ task, onSelect }: TaskCardProps) {
+  return (
+    <div onClick={() => onSelect(task.id)}>
+      {task.name}
+    </div>
+  );
+}
+
+// Good: Use existing hooks
+import { useTaskManagement } from '@/hooks/useTaskManagement';
+
+export function TaskList() {
+  const { tasks, createTask } = useTaskManagement();
+  // ...
+}
+```
+
+### File Naming Conventions
+
+- **Components**: `PascalCase.tsx` (e.g., `FileExplorer.tsx`)
+- **Hooks**: `camelCase.ts` with `use` prefix (e.g., `useTaskManagement.ts`, `use-toast.ts`)
+- **Services**: `PascalCase.ts` (e.g., `WorktreeService.ts`)
+- **Utilities**: `camelCase.ts` (e.g., `shellEscape.ts`)
+- **Tests**: `*.test.ts` (e.g., `WorktreeService.test.ts`)
+
+### Error Handling
+
+```typescript
+// Main process: Use logger
+import { log } from '../lib/logger';
+
+try {
+  await service.doSomething();
+} catch (error) {
+  log.error('Failed to do something:', error);
+  throw error;
+}
+
+// IPC handlers: Return error object
+ipcMain.handle('action', async (_event, args) => {
+  try {
+    const result = await service.doSomething(args);
+    return { success: true, data: result };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Renderer: Use toast for user-facing errors
+import { toast } from '@/components/ui/use-toast';
+
+try {
+  await window.electronAPI.action();
+} catch (error) {
+  toast({
+    title: 'Error',
+    description: error.message,
+    variant: 'destructive',
+  });
+}
+```
+
+## Git Workflow
+
+### Branching Strategy
+
+- **`main`**: Production-ready code
+- **Feature branches**: `feat/*`, `fix/*`, `refactor/*`, etc.
+- **Never commit directly to `main`**
+
+Emdash uses Git worktrees internally:
+- Worktrees created at `../worktrees/{task-name}-{hash}/`
+- Branch format: `{prefix}/{task-name}-{hash}` (default prefix: `emdash`)
+
+### Conventional Commits Format
+
+Every commit should follow this pattern:
+
+```
+feat(scope): add new feature
+  │    │            │
+  │    │            └─> Summary in present tense
+  │    └─> Optional scope (component/service name)
+  └─> Type (feat, fix, docs, refactor, etc.)
+```
+
+Real examples from Emdash:
+
+```bash
+feat(worktree): implement worktree pooling for instant task creation
+fix(agent): resolve worktree path issue in PTY spawn
+refactor(ipc): consolidate database IPC handlers
+docs: update AGENTS.md with testing workflow
+chore(deps): update drizzle-orm to 0.32.1
+test(database): add schema contract validation tests
+```
+
+## Pre-PR Checklist
+
+Before opening a PR, verify:
+
+- [ ] **Dev server runs**: `pnpm run d` starts cleanly
+- [ ] **Code is formatted**: `pnpm run format` (or pre-commit hook ran)
+- [ ] **Lint passes**: `pnpm run lint`
+- [ ] **Types check**: `pnpm run type-check`
+- [ ] **Tests pass**: `pnpm exec vitest run`
+- [ ] **No stray files**: Check for build artifacts, secrets, or temp files
+- [ ] **Documentation updated**: If behavior changed
+- [ ] **Conventional commit**: Commit messages follow the format
+
+<Warning>
+**Never commit:**
+- Build artifacts (`dist/`, `release/`)
+- Environment files with secrets (`.env` with API keys)
+- `node_modules/`
+- Editor config (`.vscode/`, `.idea/`)
+- Manually edited database migration files
+</Warning>
+
+## Code Review Process
+
+1. **Open PR**: Submit PR with clear description
+2. **CI checks**: Automated checks must pass:
+   - Format check
+   - Type check
+   - Lint check
+   - Test suite
+3. **Code review**: Maintainers review code
+4. **Address feedback**: Make requested changes
+5. **Merge**: Maintainer merges when approved
+
+## Project-Specific Guidelines
+
+### Database Migrations
+
+<Warning>
+**Never manually edit:**
+- Files in `drizzle/meta/`
+- Numbered SQL migration files
+
+Always use `drizzle-kit generate` to create migrations.
+</Warning>
+
+**To add a database field:**
+
+1. Edit `src/main/db/schema.ts`
+2. Generate migration: `pnpm exec drizzle-kit generate`
+3. Test locally with a fresh database
+4. Commit both schema and migration files
+
+### Native Modules
+
+**Never upgrade casually:**
+- `sqlite3`
+- `node-pty`
+- `keytar`
+
+These require `pnpm run rebuild` and can break across platforms.
+
+### IPC Handlers
+
+**When adding new IPC methods:**
+
+1. Create handler in `src/main/ipc/` or colocate in service
+2. Register in `main.ts`
+3. Add type definition to `src/renderer/types/electron-api.d.ts`
+4. Return consistent format: `{ success: boolean, data?: any, error?: string }`
+
+### Services Pattern
+
+All services follow this pattern:
+
+```typescript
+// src/main/services/MyService.ts
+export class MyService {
+  constructor() {
+    // Initialize
+  }
+
+  async doSomething(): Promise<void> {
+    // Implementation
+  }
+}
+
+// Export singleton instance
+export const myService = new MyService();
+```
+
+## Testing Requirements
+
+<Info>
+See the [Testing guide](/api/testing) for detailed patterns.
+</Info>
+
+### When to Add Tests
+
+- **Always**: New services or significant features
+- **Recommended**: Bug fixes (add regression test)
+- **Optional**: Simple UI tweaks
+
+### Test Coverage
+
+We don't enforce coverage percentage, but aim to test:
+- Critical business logic
+- Database operations
+- Git/worktree operations
+- PTY management
+- IPC handlers
+
+## Guardrails
+
+<Warning>
+**Always:**
+- Use feature branches, never commit directly to `main`
+- Run quality checks before committing
+- Use `drizzle-kit generate` for database changes
+- Limit edits to `src/**` and `docs/**`
+
+**Never:**
+- Modify `drizzle/meta/` or migration files manually
+- Modify `build/` entitlements without review
+- Commit build artifacts (`dist/`, `release/`)
+- Run global commands that mutate environment
+- Modify telemetry defaults without discussion
+</Warning>
+
+## Issue Reports and Feature Requests
+
+**Open GitHub Issues** with:
+
+- **Bug reports:**
+  - OS and Node.js version
+  - Steps to reproduce
+  - Expected vs actual behavior
+  - Relevant logs or error messages
+  - Screenshots/GIFs for UI issues
+
+- **Feature requests:**
+  - Use case and motivation
+  - Proposed solution
+  - Alternative approaches considered
+  - Willingness to contribute
+
+## Getting Help
+
+<CardGroup cols={2}>
+  <Card title="GitHub Issues" icon="github" href="https://github.com/generalaction/emdash/issues">
+    Report bugs or request features
+  </Card>
+  <Card title="Discord Community" icon="discord" href="https://discord.gg/f2fv7YxuR2">
+    Ask questions and discuss ideas
+  </Card>
+</CardGroup>
+
+## Community Guidelines
+
+- **Be respectful**: Treat everyone with kindness
+- **Be constructive**: Offer helpful feedback
+- **Be patient**: Maintainers review PRs as time allows
+- **Be collaborative**: Discuss big changes before implementing
+
+## Release Process (Maintainers)
+
+For maintainers releasing new versions:
+
+```bash
+# Patch version (0.4.24 → 0.4.25)
+pnpm version patch
+
+# Minor version (0.4.24 → 0.5.0)
+pnpm version minor
+
+# Major version (0.4.24 → 1.0.0)
+pnpm version major
+```
+
+This automatically:
+1. Updates `package.json` and `pnpm-lock.yaml`
+2. Creates a git commit
+3. Creates a git tag (e.g., `v0.4.25`)
+
+Then push to trigger CI/CD:
+
+```bash
+git push origin main --tags
+```
+
+GitHub Actions workflows build and release:
+- macOS: Signed .dmg (arm64)
+- Linux: AppImage, deb, rpm (x64)
+- Windows: nsis, msi (x64)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Development Setup" icon="laptop-code" href="/api/development-setup">
+    Set up your local environment
+  </Card>
+  <Card title="Testing" icon="flask" href="/api/testing">
+    Learn the testing framework
+  </Card>
+</CardGroup>
+
+---
+
+Thank you for contributing to Emdash! Every contribution, no matter how small, helps make the project better.
